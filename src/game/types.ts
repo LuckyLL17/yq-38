@@ -1,0 +1,193 @@
+export type TerrainType = 'plain' | 'forest' | 'rock' | 'water' | 'nest' | 'resource';
+
+export type InstructionType = 'MOVE' | 'ATTACK' | 'COLLECT' | 'REPRODUCE' | 'SPREAD' | 'RETREAT';
+
+export interface Instruction {
+  id: string;
+  type: InstructionType;
+  param?: number;
+}
+
+export interface Position {
+  x: number;
+  y: number;
+}
+
+export interface Velocity {
+  vx: number;
+  vy: number;
+}
+
+export interface Bug {
+  id: number;
+  pos: Position;
+  vel: Velocity;
+  target: Position | null;
+  hp: number;
+  maxHp: number;
+  attackPower: number;
+  carryCapacity: number;
+  carrying: number;
+  role: 'worker' | 'soldier' | 'scout';
+  instructionPointer: number;
+  cooldown: number;
+  wanderAngle: number;
+  age: number;
+}
+
+export interface Enemy {
+  id: number;
+  pos: Position;
+  vel: Velocity;
+  hp: number;
+  maxHp: number;
+  attackPower: number;
+  type: 'predator' | 'guard';
+  range: number;
+}
+
+export interface ResourceNode {
+  id: number;
+  pos: Position;
+  amount: number;
+  maxAmount: number;
+  type: 'food' | 'crystal';
+}
+
+export interface TerrainCell {
+  type: TerrainType;
+}
+
+export interface Particle {
+  id: number;
+  pos: Position;
+  vel: Velocity;
+  life: number;
+  maxLife: number;
+  color: string;
+  size: number;
+}
+
+export interface GameState {
+  bugs: Bug[];
+  enemies: Enemy[];
+  resources: ResourceNode[];
+  terrain: TerrainCell[][];
+  particles: Particle[];
+  nestPos: Position;
+  gridWidth: number;
+  gridHeight: number;
+  cellSize: number;
+  tick: number;
+  paused: boolean;
+  speed: number;
+  gameTime: number;
+  totalFood: number;
+  totalCrystal: number;
+  enemiesKilled: number;
+  resourcesCollected: number;
+  level: number;
+  levelObjective: string;
+  levelTarget: number;
+  levelProgress: number;
+  levelComplete: boolean;
+}
+
+export interface GameStore {
+  state: GameState;
+  instructions: Instruction[];
+  setState: (state: Partial<GameState>) => void;
+  setInstructions: (instructions: Instruction[]) => void;
+  addInstruction: (type: InstructionType, index?: number) => void;
+  removeInstruction: (id: string) => void;
+  moveInstruction: (from: number, to: number) => void;
+  setPaused: (paused: boolean) => void;
+  setSpeed: (speed: number) => void;
+  step: () => void;
+  resetLevel: () => void;
+  nextLevel: () => void;
+  spawnInitialSwarm: () => void;
+}
+
+export const INSTRUCTION_META: Record<InstructionType, {
+  name: string;
+  color: string;
+  bgColor: string;
+  borderColor: string;
+  icon: string;
+  description: string;
+  hasParam?: boolean;
+  paramLabel?: string;
+  paramMin?: number;
+  paramMax?: number;
+  paramDefault?: number;
+}> = {
+  MOVE: {
+    name: '移动',
+    color: '#34d399',
+    bgColor: 'rgba(52, 211, 153, 0.15)',
+    borderColor: '#34d399',
+    icon: '➤',
+    description: '虫群向目标方向移动，寻找资源或敌人',
+    hasParam: true,
+    paramLabel: '扩散角度',
+    paramMin: 10,
+    paramMax: 180,
+    paramDefault: 60,
+  },
+  ATTACK: {
+    name: '攻击',
+    color: '#f87171',
+    bgColor: 'rgba(248, 113, 113, 0.15)',
+    borderColor: '#f87171',
+    icon: '⚔',
+    description: '攻击附近的敌人，士兵虫效率更高',
+    hasParam: true,
+    paramLabel: '攻击范围',
+    paramMin: 20,
+    paramMax: 120,
+    paramDefault: 50,
+  },
+  COLLECT: {
+    name: '采集',
+    color: '#fbbf24',
+    bgColor: 'rgba(251, 191, 36, 0.15)',
+    borderColor: '#fbbf24',
+    icon: '◆',
+    description: '采集资源点，满后自动运回巢穴',
+  },
+  REPRODUCE: {
+    name: '繁殖',
+    color: '#c084fc',
+    bgColor: 'rgba(192, 132, 252, 0.15)',
+    borderColor: '#c084fc',
+    icon: '✦',
+    description: '消耗资源在巢穴繁殖新个体',
+    hasParam: true,
+    paramLabel: '消耗食物',
+    paramMin: 5,
+    paramMax: 50,
+    paramDefault: 15,
+  },
+  SPREAD: {
+    name: '扩散',
+    color: '#22d3ee',
+    bgColor: 'rgba(34, 211, 238, 0.15)',
+    borderColor: '#22d3ee',
+    icon: '✧',
+    description: '虫群散开，扩大搜索范围',
+    hasParam: true,
+    paramLabel: '分散强度',
+    paramMin: 1,
+    paramMax: 10,
+    paramDefault: 5,
+  },
+  RETREAT: {
+    name: '撤退',
+    color: '#fb923c',
+    bgColor: 'rgba(251, 146, 60, 0.15)',
+    borderColor: '#fb923c',
+    icon: '←',
+    description: '受伤个体返回巢穴恢复生命',
+  },
+};
