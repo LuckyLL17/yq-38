@@ -102,8 +102,8 @@ export default function InfoPanel() {
           <div className="text-xs font-bold text-amber-400 tracking-wider mb-1.5">✦ 涌现提示</div>
           <div className="text-[10px] text-amber-200/50 leading-relaxed">
             个体无智能，群体生智慧。组合 MOVE → SPREAD → COLLECT → RETREAT 可形成高效采集回路；
-            前置 ATTACK 可在接触敌人时切换作战模式。指令以循环方式执行，
-            每个虫独立维护程序计数器。
+            前置 ATTACK 可在接触敌人时切换作战模式。指令按顺序执行，
+            每条指令有独立执行时长，执行完毕自动消除，下一条指令开始执行。
           </div>
         </div>
       </div>

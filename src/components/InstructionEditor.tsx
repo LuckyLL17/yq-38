@@ -11,10 +11,13 @@ export default function InstructionEditor() {
     removeInstruction,
     moveInstruction,
     setInstructions,
+    state,
   } = useGameStore();
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
+
+  const instructionTimer = state.instructionTimer;
 
   const handleDragStart = (e: React.DragEvent, idx: number) => {
     setDragIndex(idx);
@@ -43,6 +46,12 @@ export default function InstructionEditor() {
   const updateParam = (id: string, param: number) => {
     setInstructions(
       instructions.map((i) => (i.id === id ? { ...i, param } : i))
+    );
+  };
+
+  const updateDuration = (id: string, duration: number) => {
+    setInstructions(
+      instructions.map((i) => (i.id === id ? { ...i, duration } : i))
     );
   };
 
@@ -142,34 +151,87 @@ export default function InstructionEditor() {
                         style={{ backgroundColor: meta.color + '20', color: meta.color }}>
                         {inst.type}
                       </span>
+                      {idx === 0 && (
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 animate-pulse">
+                          执行中
+                        </span>
+                      )}
                     </div>
-                    {isEditing && meta.hasParam && inst.param !== undefined && (
-                      <div className="mt-2 pr-2">
-                        <div className="flex items-center justify-between text-[10px] mb-1" style={{ color: meta.color + 'cc' }}>
-                          <span>{meta.paramLabel}</span>
-                          <span className="font-mono font-bold">{inst.param}</span>
+
+                    {idx === 0 && (
+                      <div className="mt-1.5 mb-1">
+                        <div className="relative h-1.5 rounded-full bg-black/40 overflow-hidden">
+                          <div
+                            className="absolute inset-y-0 left-0 rounded-full transition-all duration-150"
+                            style={{
+                              width: `${Math.max(0, Math.min(100, (instructionTimer / Math.max(1, inst.duration)) * 100))}%`,
+                              background: `linear-gradient(90deg, ${meta.color}, ${meta.color}80)`,
+                              boxShadow: `0 0 6px ${meta.color}80`,
+                            }}
+                          />
                         </div>
-                        <input
-                          type="range"
-                          min={meta.paramMin}
-                          max={meta.paramMax}
-                          value={inst.param}
-                          onChange={(e) => {
-                            e.stopPropagation();
-                            updateParam(inst.id, Number(e.target.value));
-                          }}
-                          onClick={(e) => e.stopPropagation()}
-                          className="w-full h-1 rounded-full appearance-none cursor-pointer"
-                          style={{
-                            background: `linear-gradient(to right, ${meta.color} 0%, ${meta.color} ${((inst.param - (meta.paramMin ?? 0)) / ((meta.paramMax ?? 100) - (meta.paramMin ?? 0))) * 100}%, rgba(255,255,255,0.1) ${((inst.param - (meta.paramMin ?? 0)) / ((meta.paramMax ?? 100) - (meta.paramMin ?? 0))) * 100}%, rgba(255,255,255,0.1) 100%)`,
-                            accentColor: meta.color,
-                          }}
-                        />
+                        <div className="flex justify-between text-[9px] font-mono mt-0.5 opacity-70" style={{ color: meta.color }}>
+                          <span>剩余 {Math.max(0, instructionTimer)} tick</span>
+                          <span>时长 {inst.duration}</span>
+                        </div>
                       </div>
                     )}
-                    {!isEditing && meta.hasParam && (
+
+                    {isEditing && (
+                      <div className="mt-2 pr-2 space-y-2">
+                        {meta.hasParam && inst.param !== undefined && (
+                          <div>
+                            <div className="flex items-center justify-between text-[10px] mb-1" style={{ color: meta.color + 'cc' }}>
+                              <span>{meta.paramLabel}</span>
+                              <span className="font-mono font-bold">{inst.param}</span>
+                            </div>
+                            <input
+                              type="range"
+                              min={meta.paramMin}
+                              max={meta.paramMax}
+                              value={inst.param}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                updateParam(inst.id, Number(e.target.value));
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              className="w-full h-1 rounded-full appearance-none cursor-pointer"
+                              style={{
+                                background: `linear-gradient(to right, ${meta.color} 0%, ${meta.color} ${((inst.param - (meta.paramMin ?? 0)) / ((meta.paramMax ?? 100) - (meta.paramMin ?? 0))) * 100}%, rgba(255,255,255,0.1) ${((inst.param - (meta.paramMin ?? 0)) / ((meta.paramMax ?? 100) - (meta.paramMin ?? 0))) * 100}%, rgba(255,255,255,0.1) 100%)`,
+                                accentColor: meta.color,
+                              }}
+                            />
+                          </div>
+                        )}
+                        <div>
+                          <div className="flex items-center justify-between text-[10px] mb-1" style={{ color: meta.color + 'cc' }}>
+                            <span>{meta.durationLabel}</span>
+                            <span className="font-mono font-bold">{inst.duration}</span>
+                          </div>
+                          <input
+                            type="range"
+                            min={meta.durationMin}
+                            max={meta.durationMax}
+                            step={10}
+                            value={inst.duration}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              updateDuration(inst.id, Number(e.target.value));
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            className="w-full h-1 rounded-full appearance-none cursor-pointer"
+                            style={{
+                              background: `linear-gradient(to right, ${meta.color} 0%, ${meta.color} ${((inst.duration - meta.durationMin) / (meta.durationMax - meta.durationMin)) * 100}%, rgba(255,255,255,0.1) ${((inst.duration - meta.durationMin) / (meta.durationMax - meta.durationMin)) * 100}%, rgba(255,255,255,0.1) 100%)`,
+                              accentColor: meta.color,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                    {!isEditing && (
                       <div className="text-[10px] mt-0.5 font-mono opacity-60" style={{ color: meta.color }}>
-                        {meta.paramLabel}: {inst.param}
+                        时长: {inst.duration} tick
+                        {meta.hasParam && ` · ${meta.paramLabel}: ${inst.param}`}
                       </div>
                     )}
                   </div>

@@ -6,6 +6,7 @@ export interface Instruction {
   id: string;
   type: InstructionType;
   param?: number;
+  duration: number;
 }
 
 export interface Position {
@@ -84,8 +85,11 @@ export interface GameState {
   gameTime: number;
   totalFood: number;
   totalCrystal: number;
+  totalFoodGained: number;
+  totalCrystalGained: number;
   enemiesKilled: number;
   resourcesCollected: number;
+  instructionTimer: number;
   level: number;
   levelObjective: string;
   levelTarget: number;
@@ -121,6 +125,10 @@ export const INSTRUCTION_META: Record<InstructionType, {
   paramMin?: number;
   paramMax?: number;
   paramDefault?: number;
+  durationDefault: number;
+  durationMin: number;
+  durationMax: number;
+  durationLabel: string;
 }> = {
   MOVE: {
     name: '移动',
@@ -134,6 +142,10 @@ export const INSTRUCTION_META: Record<InstructionType, {
     paramMin: 10,
     paramMax: 180,
     paramDefault: 60,
+    durationDefault: 300,
+    durationMin: 60,
+    durationMax: 900,
+    durationLabel: '执行时长(tick)',
   },
   ATTACK: {
     name: '攻击',
@@ -147,6 +159,10 @@ export const INSTRUCTION_META: Record<InstructionType, {
     paramMin: 20,
     paramMax: 120,
     paramDefault: 50,
+    durationDefault: 400,
+    durationMin: 120,
+    durationMax: 1200,
+    durationLabel: '执行时长(tick)',
   },
   COLLECT: {
     name: '采集',
@@ -155,6 +171,10 @@ export const INSTRUCTION_META: Record<InstructionType, {
     borderColor: '#fbbf24',
     icon: '◆',
     description: '采集资源点，满后自动运回巢穴',
+    durationDefault: 500,
+    durationMin: 120,
+    durationMax: 1500,
+    durationLabel: '执行时长(tick)',
   },
   REPRODUCE: {
     name: '繁殖',
@@ -168,6 +188,10 @@ export const INSTRUCTION_META: Record<InstructionType, {
     paramMin: 5,
     paramMax: 50,
     paramDefault: 15,
+    durationDefault: 350,
+    durationMin: 120,
+    durationMax: 900,
+    durationLabel: '执行时长(tick)',
   },
   SPREAD: {
     name: '扩散',
@@ -181,6 +205,10 @@ export const INSTRUCTION_META: Record<InstructionType, {
     paramMin: 1,
     paramMax: 10,
     paramDefault: 5,
+    durationDefault: 250,
+    durationMin: 60,
+    durationMax: 800,
+    durationLabel: '执行时长(tick)',
   },
   RETREAT: {
     name: '撤退',
@@ -189,5 +217,9 @@ export const INSTRUCTION_META: Record<InstructionType, {
     borderColor: '#fb923c',
     icon: '←',
     description: '受伤个体返回巢穴恢复生命',
+    durationDefault: 300,
+    durationMin: 60,
+    durationMax: 800,
+    durationLabel: '执行时长(tick)',
   },
 };

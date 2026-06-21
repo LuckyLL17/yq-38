@@ -245,13 +245,12 @@ export function simulateStep(
     const baseSpeed = bug.role === 'scout' ? 1.4 : bug.role === 'soldier' ? 0.85 : 1.05;
     const speed = 1.2 * baseSpeed * speedMul;
 
-    if (instructions.length === 0) {
+    const cur = instructions[0];
+
+    if (!cur) {
       bug.wanderAngle += rand(-0.1, 0.1);
     } else {
-      const cur = instructions[bug.instructionPointer % instructions.length];
-
-      if (cur) {
-        switch (cur.type) {
+      switch (cur.type) {
           case 'MOVE': {
             const spreadRad = ((cur.param ?? 60) * Math.PI) / 180;
             const toRight = { x: GRID_W * CELL * 0.9, y: bug.pos.y };
@@ -416,11 +415,6 @@ export function simulateStep(
             break;
           }
         }
-      }
-
-      if (instructions.length > 0 && bug.cooldown <= 0 && Math.random() < 0.015) {
-        bug.instructionPointer = (bug.instructionPointer + 1) % instructions.length;
-      }
     }
 
     let cohX = 0, cohY = 0, aliX = 0, aliY = 0, sepX = 0, sepY = 0, nc = 0, na = 0, ns = 0;
@@ -551,6 +545,8 @@ export function simulateStep(
     gameTime: state.gameTime + state.speed,
     totalFood: state.totalFood + deltaFood.v,
     totalCrystal: state.totalCrystal + deltaCrystal.v,
+    totalFoodGained: state.totalFoodGained + deltaFood.v,
+    totalCrystalGained: state.totalCrystalGained + deltaCrystal.v,
     enemiesKilled: state.enemiesKilled + deltaKills.v,
     resourcesCollected: state.resourcesCollected + deltaCollected.v,
   };
@@ -591,6 +587,12 @@ export function createInitialState(level: number): GameState {
   ];
   const lv = levels[(level - 1) % levels.length];
 
+  const initialFood = 30;
+  let initialProgress = 0;
+  if (lv.type === 'food') {
+    initialProgress = initialFood;
+  }
+
   return {
     bugs: [],
     enemies,
@@ -605,14 +607,17 @@ export function createInitialState(level: number): GameState {
     paused: false,
     speed: 1,
     gameTime: 0,
-    totalFood: 30,
+    totalFood: initialFood,
     totalCrystal: 0,
+    totalFoodGained: initialFood,
+    totalCrystalGained: 0,
     enemiesKilled: 0,
     resourcesCollected: 0,
+    instructionTimer: 0,
     level,
     levelObjective: lv.obj,
     levelTarget: lv.target,
-    levelProgress: 0,
+    levelProgress: initialProgress,
     levelComplete: false,
   };
 }
@@ -631,11 +636,12 @@ export function updateLevelProgress(state: GameState): GameState {
   const lv = levels[(state.level - 1) % levels.length];
   let progress = 0;
   switch (lv.type) {
-    case 'food': progress = state.totalFood; break;
-    case 'crystal': progress = state.totalCrystal; break;
+    case 'food': progress = state.totalFoodGained; break;
+    case 'crystal': progress = state.totalCrystalGained; break;
     case 'kill': progress = state.enemiesKilled; break;
     case 'population': progress = state.bugs.length; break;
   }
-  const complete = progress >= state.levelTarget;
-  return { ...state, levelProgress: progress, levelComplete: complete };
+  const newProgress = Math.max(state.levelProgress, progress);
+  const complete = state.levelComplete || newProgress >= state.levelTarget;
+  return { ...state, levelProgress: newProgress, levelComplete: complete };
 }
