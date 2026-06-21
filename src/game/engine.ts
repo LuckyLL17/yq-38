@@ -218,11 +218,24 @@ export function simulateStep(
   const newParticles = [...state.particles];
   const pid = { v: (state.particles[state.particles.length - 1]?.id ?? 0) + 1 };
 
+  const deltaFood = { v: 0 };
+  const deltaCrystal = { v: 0 };
+  const deltaKills = { v: 0 };
+  const deltaCollected = { v: 0 };
+  const ctxWrap: SimulationContext = {
+    instructions: ctx.instructions,
+    onFoodGained: (n) => { deltaFood.v += n; ctx.onFoodGained?.(n); },
+    onCrystalGained: (n) => { deltaCrystal.v += n; ctx.onCrystalGained?.(n); },
+    onEnemyKilled: () => { deltaKills.v += 1; ctx.onEnemyKilled?.(); },
+    onResourceCollected: () => { deltaCollected.v += 1; ctx.onResourceCollected?.(); },
+    onBugDied: ctx.onBugDied,
+  };
+
   const newBugs = state.bugs.map(b => ({ ...b, vel: { ...b.vel }, pos: { ...b.pos } }));
   const newEnemies = state.enemies.map(e => ({ ...e, vel: { ...e.vel }, pos: { ...e.pos } }));
   const newResources = state.resources.map(r => ({ ...r, pos: { ...r.pos } }));
 
-  const instructions = ctx.instructions;
+  const instructions = ctxWrap.instructions;
 
   for (const bug of newBugs) {
     bug.age++;
@@ -298,10 +311,10 @@ export function simulateStep(
                 if (bug.carrying > 0) {
                   const nearest = nearestRes;
                   if (nearest && nearest.type === 'crystal') {
-                    ctx.onCrystalGained?.(bug.carrying);
+                    ctxWrap.onCrystalGained?.(bug.carrying);
                     addParticle(newParticles, pid, bug.pos, '#a78bfa', 3, 5);
                   } else {
-                    ctx.onFoodGained?.(bug.carrying);
+                    ctxWrap.onFoodGained?.(bug.carrying);
                     addParticle(newParticles, pid, bug.pos, '#fbbf24', 3, 5);
                   }
                   bug.carrying = 0;
@@ -317,7 +330,7 @@ export function simulateStep(
                 const take = Math.min(bug.carryCapacity - bug.carrying, 3, nearestRes.amount);
                 bug.carrying += take;
                 nearestRes.amount -= take;
-                ctx.onResourceCollected?.();
+                ctxWrap.onResourceCollected?.();
                 bug.cooldown = 10;
                 addParticle(newParticles, pid, nearestRes.pos,
                   nearestRes.type === 'crystal' ? '#a78bfa' : '#fbbf24', 2, 2);
@@ -355,7 +368,7 @@ export function simulateStep(
                 bug.cooldown = 18;
                 addParticle(newParticles, pid, nearestEnemy.pos, '#f87171', 3, 3);
                 if (nearestEnemy.hp <= 0) {
-                  ctx.onEnemyKilled?.();
+                  ctxWrap.onEnemyKilled?.();
                   addParticle(newParticles, pid, nearestEnemy.pos, '#ef4444', 4, 10);
                 }
               }
@@ -509,7 +522,7 @@ export function simulateStep(
 
   const survivedBugs = newBugs.filter(b => {
     if (b.hp <= 0) {
-      ctx.onBugDied?.();
+      ctxWrap.onBugDied?.();
       addParticle(newParticles, pid, b.pos, '#34d399', 3, 8);
       return false;
     }
@@ -536,6 +549,10 @@ export function simulateStep(
     particles: aliveParticles,
     tick: state.tick + 1,
     gameTime: state.gameTime + state.speed,
+    totalFood: state.totalFood + deltaFood.v,
+    totalCrystal: state.totalCrystal + deltaCrystal.v,
+    enemiesKilled: state.enemiesKilled + deltaKills.v,
+    resourcesCollected: state.resourcesCollected + deltaCollected.v,
   };
 }
 
