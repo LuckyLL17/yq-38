@@ -30,13 +30,29 @@ export interface TimeCycleState {
   weatherEffect: WeatherEffect;
 }
 
-export type InstructionType = 'MOVE' | 'ATTACK' | 'COLLECT' | 'REPRODUCE' | 'SPREAD' | 'RETREAT';
+export type InstructionType = 'MOVE' | 'ATTACK' | 'COLLECT' | 'REPRODUCE' | 'SPREAD' | 'RETREAT' | 'IF' | 'ELSE' | 'LOOP';
+
+export type ConditionType =
+  | 'ENEMY_NEARBY'
+  | 'RESOURCE_NEARBY'
+  | 'HP_LOW'
+  | 'HP_HIGH'
+  | 'CARRYING_FULL'
+  | 'FOOD_ABUNDANT'
+  | 'FOOD_LOW'
+  | 'DAYTIME'
+  | 'NIGHTTIME';
 
 export interface Instruction {
   id: string;
   type: InstructionType;
   param?: number;
   duration: number;
+  children?: Instruction[];
+  elseChildren?: Instruction[];
+  condition?: ConditionType;
+  conditionParam?: number;
+  collapsed?: boolean;
 }
 
 export interface Position {
@@ -171,12 +187,18 @@ export interface PheromoneMap {
   maxStrength: number;
 }
 
+export interface ExecutionFrame {
+  instructionId: string;
+  loopCounter: number;
+}
+
 export interface Squad {
   id: string;
   name: string;
   color: string;
   instructions: Instruction[];
   instructionTimer: number;
+  executionStack: ExecutionFrame[];
   createdAt: number;
 }
 
@@ -280,9 +302,11 @@ export interface GameStore {
   showPheromoneLayer: boolean;
   setState: (state: Partial<GameState>) => void;
   setInstructions: (instructions: Instruction[]) => void;
-  addInstruction: (type: InstructionType, index?: number) => void;
+  addInstruction: (type: InstructionType, index?: number, parentId?: string, branch?: 'if' | 'else') => void;
   removeInstruction: (id: string) => void;
   moveInstruction: (from: number, to: number) => void;
+  updateInstruction: (instructionId: string, updates: Partial<Instruction>) => void;
+  toggleInstructionCollapsed: (instructionId: string) => void;
   setPaused: (paused: boolean) => void;
   setSpeed: (speed: number) => void;
   togglePheromoneLayer: () => void;
@@ -310,9 +334,11 @@ export interface GameStore {
   setSquadColor: (squadId: string, color: string) => void;
   setCurrentSquad: (squadId: string) => void;
   setSquadInstructions: (squadId: string, instructions: Instruction[]) => void;
-  addSquadInstruction: (squadId: string, type: InstructionType, index?: number) => void;
+  addSquadInstruction: (squadId: string, type: InstructionType, index?: number, parentId?: string, branch?: 'if' | 'else') => void;
   removeSquadInstruction: (squadId: string, instructionId: string) => void;
   moveSquadInstruction: (squadId: string, from: number, to: number) => void;
+  updateSquadInstruction: (squadId: string, instructionId: string, updates: Partial<Instruction>) => void;
+  toggleSquadInstructionCollapsed: (squadId: string, instructionId: string) => void;
   assignBugToSquad: (bugId: number, squadId: string) => void;
   assignBulkToSquad: (bugIds: number[], squadId: string) => void;
   assignAllToSquad: (squadId: string) => void;
@@ -427,6 +453,49 @@ export const INSTRUCTION_META: Record<InstructionType, {
     durationMin: 60,
     durationMax: 800,
     durationLabel: '执行时长(tick)',
+  },
+  IF: {
+    name: '如果',
+    color: '#818cf8',
+    bgColor: 'rgba(129, 140, 248, 0.15)',
+    borderColor: '#818cf8',
+    icon: '?',
+    description: '条件判断，满足条件则执行子指令块',
+    hasParam: false,
+    durationDefault: 0,
+    durationMin: 0,
+    durationMax: 0,
+    durationLabel: '逻辑块',
+  },
+  ELSE: {
+    name: '否则',
+    color: '#a78bfa',
+    bgColor: 'rgba(167, 139, 250, 0.15)',
+    borderColor: '#a78bfa',
+    icon: ':',
+    description: 'IF 条件不满足时执行的分支',
+    hasParam: false,
+    durationDefault: 0,
+    durationMin: 0,
+    durationMax: 0,
+    durationLabel: '逻辑块',
+  },
+  LOOP: {
+    name: '循环',
+    color: '#f472b6',
+    bgColor: 'rgba(244, 114, 182, 0.15)',
+    borderColor: '#f472b6',
+    icon: '⟳',
+    description: '循环执行子指令块，可指定循环次数',
+    hasParam: true,
+    paramLabel: '循环次数(0为无限)',
+    paramMin: 0,
+    paramMax: 100,
+    paramDefault: 3,
+    durationDefault: 0,
+    durationMin: 0,
+    durationMax: 0,
+    durationLabel: '逻辑块',
   },
 };
 
@@ -681,6 +750,18 @@ export const WEATHER_WEIGHTS: Record<WeatherType, number> = {
   rain: 15,
   fog: 10,
   storm: 5,
+};
+
+export const CONDITION_LABELS: Record<ConditionType, { label: string; description: string; hasParam: boolean; paramLabel?: string; paramDefault?: number; paramMin?: number; paramMax?: number }> = {
+  ENEMY_NEARBY: { label: '附近有敌人', description: '侦测范围内存在敌人', hasParam: true, paramLabel: '侦测距离', paramDefault: 100, paramMin: 20, paramMax: 300 },
+  RESOURCE_NEARBY: { label: '附近有资源', description: '侦测范围内存在资源点', hasParam: true, paramLabel: '侦测距离', paramDefault: 120, paramMin: 20, paramMax: 300 },
+  HP_LOW: { label: '生命值低', description: '虫群平均生命值低于阈值', hasParam: true, paramLabel: '血量阈值(%)', paramDefault: 30, paramMin: 5, paramMax: 90 },
+  HP_HIGH: { label: '生命值高', description: '虫群平均生命值高于阈值', hasParam: true, paramLabel: '血量阈值(%)', paramDefault: 80, paramMin: 10, paramMax: 95 },
+  CARRYING_FULL: { label: '携带已满', description: '个体携带资源达到容量上限', hasParam: false },
+  FOOD_ABUNDANT: { label: '食物充足', description: '总食物储备超过阈值', hasParam: true, paramLabel: '食物数量', paramDefault: 100, paramMin: 10, paramMax: 500 },
+  FOOD_LOW: { label: '食物短缺', description: '总食物储备低于阈值', hasParam: true, paramLabel: '食物数量', paramDefault: 30, paramMin: 5, paramMax: 200 },
+  DAYTIME: { label: '白天时段', description: '当前为白昼时段', hasParam: false },
+  NIGHTTIME: { label: '夜晚时段', description: '当前为夜晚时段', hasParam: false },
 };
 
 export const TIME_OF_DAY_LABELS: Record<TimeOfDay, { label: string; icon: string; color: string }> = {

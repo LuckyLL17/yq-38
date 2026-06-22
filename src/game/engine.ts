@@ -17,6 +17,8 @@ import type {
   TimeCycleState,
   TimeOfDay,
   WeatherType,
+  ConditionType,
+  ExecutionFrame,
 } from './types';
 import {
   MUTATION_LIBRARY,
@@ -29,6 +31,7 @@ import {
   WEATHER_CHANGE_INTERVAL,
   getTimeOfDay,
   selectRandomWeather,
+  CONDITION_LABELS,
 } from './types';
 
 const GRID_W = 60;
@@ -493,8 +496,7 @@ export function simulateStep(
     const speed = 1.2 * baseSpeed * speedMul * speedBoost * dayNightEffect.bugSpeedMul;
 
     const squad = squadMap.get(bug.squadId);
-    const squadInstructions = squad?.instructions ?? [];
-    const cur = squadInstructions[0];
+    const cur = squad ? resolveActiveInstructionForBug(squad, state, bug) : null;
 
     if (!cur) {
       bug.wanderAngle += rand(-0.1, 0.1);
@@ -957,6 +959,7 @@ export function createDefaultSquads(): Squad[] {
       color: DEFAULT_SQUAD_COLORS[0],
       instructions: [],
       instructionTimer: 0,
+      executionStack: [],
       createdAt: now,
     },
     {
@@ -965,6 +968,7 @@ export function createDefaultSquads(): Squad[] {
       color: DEFAULT_SQUAD_COLORS[2],
       instructions: [],
       instructionTimer: 0,
+      executionStack: [],
       createdAt: now + 1,
     },
     {
@@ -973,6 +977,7 @@ export function createDefaultSquads(): Squad[] {
       color: DEFAULT_SQUAD_COLORS[1],
       instructions: [],
       instructionTimer: 0,
+      executionStack: [],
       createdAt: now + 2,
     },
   ];
@@ -1102,4 +1107,402 @@ export function updateLevelProgress(state: GameState): GameState {
   const newProgress = Math.max(state.levelProgress, progress);
   const complete = state.levelComplete || newProgress >= state.levelTarget;
   return { ...state, levelProgress: newProgress, levelComplete: complete };
+}
+
+export function evaluateCondition(
+  condition: ConditionType,
+  conditionParam: number | undefined,
+  state: GameState,
+  squad: Squad
+): boolean {
+  const squadBugs = state.bugs.filter(b => b.squadId === squad.id);
+  if (squadBugs.length === 0) return false;
+
+  switch (condition) {
+    case 'ENEMY_NEARBY': {
+      const range = conditionParam ?? 100;
+      for (const bug of squadBugs) {
+        for (const enemy of state.enemies) {
+          if (enemy.hp > 0 && dist(bug.pos, enemy.pos) < range) return true;
+        }
+      }
+      return false;
+    }
+    case 'RESOURCE_NEARBY': {
+      const range = conditionParam ?? 120;
+      for (const bug of squadBugs) {
+        for (const res of state.resources) {
+          if (res.amount > 0 && dist(bug.pos, res.pos) < range) return true;
+        }
+      }
+      return false;
+    }
+    case 'HP_LOW': {
+      const threshold = (conditionParam ?? 30) / 100;
+      const avgHp = squadBugs.reduce((sum, b) => sum + (b.hp / b.maxHp), 0) / squadBugs.length;
+      return avgHp < threshold;
+    }
+    case 'HP_HIGH': {
+      const threshold = (conditionParam ?? 80) / 100;
+      const avgHp = squadBugs.reduce((sum, b) => sum + (b.hp / b.maxHp), 0) / squadBugs.length;
+      return avgHp > threshold;
+    }
+    case 'CARRYING_FULL': {
+      return squadBugs.some(b => b.carrying >= b.carryCapacity);
+    }
+    case 'FOOD_ABUNDANT': {
+      return state.totalFood >= (conditionParam ?? 100);
+    }
+    case 'FOOD_LOW': {
+      return state.totalFood <= (conditionParam ?? 30);
+    }
+    case 'DAYTIME': {
+      return state.timeCycle.timeOfDay === 'day' || state.timeCycle.timeOfDay === 'dawn' || state.timeCycle.timeOfDay === 'dusk';
+    }
+    case 'NIGHTTIME': {
+      return state.timeCycle.timeOfDay === 'night';
+    }
+    default:
+      return false;
+  }
+}
+
+interface InstructionLocation {
+  list: Instruction[];
+  index: number;
+}
+
+function findInstructionLocation(
+  instructions: Instruction[],
+  instructionId: string
+): InstructionLocation | null {
+  for (let i = 0; i < instructions.length; i++) {
+    if (instructions[i].id === instructionId) {
+      return { list: instructions, index: i };
+    }
+    if (instructions[i].children) {
+      const found = findInstructionLocation(instructions[i].children!, instructionId);
+      if (found) return found;
+    }
+    if (instructions[i].elseChildren) {
+      const found = findInstructionLocation(instructions[i].elseChildren!, instructionId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+export function getCurrentLeafInstruction(
+  squad: Squad
+): Instruction | null {
+  if (squad.instructions.length === 0) return null;
+
+  let currentList = squad.instructions;
+  for (const frame of squad.executionStack) {
+    const loc = findInstructionLocation(currentList, frame.instructionId);
+    if (!loc) return null;
+    const inst = loc.list[loc.index];
+    if (inst.type === 'LOOP') {
+      currentList = inst.children ?? [];
+    } else if (inst.type === 'IF') {
+      currentList = inst.children ?? [];
+    }
+  }
+
+  if (currentList.length === 0) return null;
+  const first = currentList[0];
+  if (first.type === 'IF' || first.type === 'LOOP') {
+    return first;
+  }
+  return first;
+}
+
+function getFirstLeafFromList(list: Instruction[]): Instruction | null {
+  if (list.length === 0) return null;
+  const first = list[0];
+  if (first.type === 'IF') {
+    return getFirstLeafFromList(first.children ?? []);
+  }
+  if (first.type === 'LOOP') {
+    return getFirstLeafFromList(first.children ?? []);
+  }
+  return first;
+}
+
+export function getActiveExecutableInstruction(
+  squad: Squad,
+  state: GameState
+): Instruction | null {
+  return resolveActiveInstruction(squad, state);
+}
+
+function resolveActiveInstruction(
+  squad: Squad,
+  state: GameState
+): Instruction | null {
+  if (squad.instructions.length === 0) return null;
+
+  let currentList = squad.instructions;
+  for (const frame of squad.executionStack) {
+    const loc = findInstructionLocation(currentList, frame.instructionId);
+    if (!loc) return null;
+    const inst = loc.list[loc.index];
+    if (inst.type === 'LOOP') {
+      currentList = inst.children ?? [];
+    } else if (inst.type === 'IF') {
+      const condMet = evaluateCondition(inst.condition!, inst.conditionParam, state, squad);
+      currentList = condMet ? (inst.children ?? []) : (inst.elseChildren ?? []);
+    }
+  }
+
+  return getFirstLeafFromList(currentList);
+}
+
+export interface StepResult {
+  instructionSwitched: boolean;
+  nextType?: string;
+  remainingCount?: number;
+}
+
+export function stepSquadInstructions(
+  squad: Squad,
+  state: GameState
+): StepResult {
+  const result: StepResult = { instructionSwitched: false };
+  if (squad.instructions.length === 0) return result;
+
+  if (squad.instructionTimer > 0) {
+    squad.instructionTimer--;
+    if (squad.instructionTimer > 0) return result;
+  }
+
+  let currentList = squad.instructions;
+  let parentLists: Instruction[][] = [];
+  let currentInstructionId: string | null = null;
+
+  for (const frame of squad.executionStack) {
+    const loc = findInstructionLocation(currentList, frame.instructionId);
+    if (!loc) {
+      squad.executionStack = [];
+      return stepSquadInstructions(squad, state);
+    }
+    parentLists.push(currentList);
+    const inst = loc.list[loc.index];
+    currentInstructionId = inst.id;
+    if (inst.type === 'LOOP') {
+      currentList = inst.children ?? [];
+    } else if (inst.type === 'IF') {
+      const condMet = evaluateCondition(inst.condition!, inst.conditionParam, state, squad);
+      currentList = condMet ? (inst.children ?? []) : (inst.elseChildren ?? []);
+    }
+  }
+
+  if (currentList.length > 0) {
+    const first = currentList[0];
+
+    if (first.type === 'IF') {
+      squad.executionStack.push({ instructionId: first.id, loopCounter: 0 });
+      return stepSquadInstructions(squad, state);
+    }
+
+    if (first.type === 'LOOP') {
+      const maxLoops = first.param ?? 0;
+      const existingFrame = squad.executionStack.find(f => f.instructionId === first.id);
+      if (!existingFrame) {
+        squad.executionStack.push({ instructionId: first.id, loopCounter: 0 });
+      }
+      const frame = squad.executionStack.find(f => f.instructionId === first.id)!;
+      if (maxLoops > 0 && frame.loopCounter >= maxLoops) {
+        currentList.shift();
+        squad.executionStack = squad.executionStack.filter(f => f.instructionId !== first.id);
+        result.instructionSwitched = true;
+        const nextLeaf = resolveActiveInstruction(squad, state);
+        result.nextType = nextLeaf?.type;
+        result.remainingCount = countInstructions(squad.instructions);
+        return stepSquadInstructions(squad, state);
+      }
+      frame.loopCounter++;
+      return stepSquadInstructions(squad, state);
+    }
+
+    if (squad.instructionTimer <= 0) {
+      if (first.duration > 0) {
+        squad.instructionTimer = first.duration;
+      }
+      if (currentList.length > 1 || squad.executionStack.length > 0) {
+        currentList.shift();
+        if (squad.instructionTimer <= 0) {
+          result.instructionSwitched = true;
+          return stepSquadInstructions(squad, state);
+        }
+        result.instructionSwitched = true;
+        const nextLeaf = resolveActiveInstruction(squad, state);
+        result.nextType = nextLeaf?.type;
+        result.remainingCount = countInstructions(squad.instructions);
+        return result;
+      } else {
+        currentList.shift();
+        while (squad.executionStack.length > 0) {
+          const topFrame = squad.executionStack[squad.executionStack.length - 1];
+          const parentList = parentLists[parentLists.length - 1];
+          const topLoc = findInstructionLocation(parentList, topFrame.instructionId);
+          if (!topLoc) break;
+          const topInst = topLoc.list[topLoc.index];
+
+          if (topInst.type === 'LOOP') {
+            const maxLoops = topInst.param ?? 0;
+            if (maxLoops === 0 || topFrame.loopCounter < maxLoops) {
+              topFrame.loopCounter++;
+              const nextLeaf = resolveActiveInstruction(squad, state);
+              result.nextType = nextLeaf?.type;
+              result.remainingCount = countInstructions(squad.instructions);
+              result.instructionSwitched = true;
+              return stepSquadInstructions(squad, state);
+            }
+          }
+
+          squad.executionStack.pop();
+          parentLists.pop();
+
+          const parentParentList = parentLists.length > 0 ? parentLists[parentLists.length - 1] : squad.instructions;
+          const parentLoc = findInstructionLocation(parentParentList, topInst.id);
+          if (parentLoc) {
+            parentLoc.list.splice(parentLoc.index, 1);
+            if (parentLoc.list.length > 0) {
+              result.instructionSwitched = true;
+              const nextLeaf = resolveActiveInstruction(squad, state);
+              result.nextType = nextLeaf?.type;
+              result.remainingCount = countInstructions(squad.instructions);
+              return stepSquadInstructions(squad, state);
+            }
+          }
+        }
+      }
+    }
+  } else {
+    while (squad.executionStack.length > 0) {
+      const topFrame = squad.executionStack[squad.executionStack.length - 1];
+      const parentList = parentLists[parentLists.length - 1];
+      const topLoc = findInstructionLocation(parentList, topFrame.instructionId);
+      if (!topLoc) break;
+      const topInst = topLoc.list[topLoc.index];
+
+      if (topInst.type === 'LOOP') {
+        const maxLoops = topInst.param ?? 0;
+        if (maxLoops === 0 || topFrame.loopCounter < maxLoops) {
+          topFrame.loopCounter++;
+          result.instructionSwitched = true;
+          const nextLeaf = resolveActiveInstruction(squad, state);
+          result.nextType = nextLeaf?.type;
+          result.remainingCount = countInstructions(squad.instructions);
+          return stepSquadInstructions(squad, state);
+        }
+      }
+
+      squad.executionStack.pop();
+      parentLists.pop();
+
+      const parentParentList = parentLists.length > 0 ? parentLists[parentLists.length - 1] : squad.instructions;
+      const parentLoc = findInstructionLocation(parentParentList, topInst.id);
+      if (parentLoc) {
+        parentLoc.list.splice(parentLoc.index, 1);
+        if (parentLoc.list.length > 0) {
+          result.instructionSwitched = true;
+          const nextLeaf = resolveActiveInstruction(squad, state);
+          result.nextType = nextLeaf?.type;
+          result.remainingCount = countInstructions(squad.instructions);
+          return stepSquadInstructions(squad, state);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+function countInstructions(instructions: Instruction[]): number {
+  let count = 0;
+  for (const inst of instructions) {
+    count++;
+    if (inst.children) count += countInstructions(inst.children);
+    if (inst.elseChildren) count += countInstructions(inst.elseChildren);
+  }
+  return count;
+}
+
+export function createSquadInstructionId(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${Math.random().toString(36).slice(2, 6)}`;
+}
+
+export function evaluateConditionForBug(
+  condition: ConditionType,
+  conditionParam: number | undefined,
+  state: GameState,
+  squad: Squad,
+  bug: Bug
+): boolean {
+  switch (condition) {
+    case 'ENEMY_NEARBY': {
+      const range = conditionParam ?? 100;
+      for (const enemy of state.enemies) {
+        if (enemy.hp > 0 && dist(bug.pos, enemy.pos) < range) return true;
+      }
+      return false;
+    }
+    case 'RESOURCE_NEARBY': {
+      const range = conditionParam ?? 120;
+      for (const res of state.resources) {
+        if (res.amount > 0 && dist(bug.pos, res.pos) < range) return true;
+      }
+      return false;
+    }
+    case 'HP_LOW': {
+      const threshold = (conditionParam ?? 30) / 100;
+      return (bug.hp / bug.maxHp) < threshold;
+    }
+    case 'HP_HIGH': {
+      const threshold = (conditionParam ?? 80) / 100;
+      return (bug.hp / bug.maxHp) > threshold;
+    }
+    case 'CARRYING_FULL': {
+      return bug.carrying >= bug.carryCapacity;
+    }
+    case 'FOOD_ABUNDANT': {
+      return state.totalFood >= (conditionParam ?? 100);
+    }
+    case 'FOOD_LOW': {
+      return state.totalFood <= (conditionParam ?? 30);
+    }
+    case 'DAYTIME': {
+      return state.timeCycle.timeOfDay === 'day' || state.timeCycle.timeOfDay === 'dawn' || state.timeCycle.timeOfDay === 'dusk';
+    }
+    case 'NIGHTTIME': {
+      return state.timeCycle.timeOfDay === 'night';
+    }
+    default:
+      return false;
+  }
+}
+
+function resolveActiveInstructionForBug(
+  squad: Squad,
+  state: GameState,
+  bug: Bug
+): Instruction | null {
+  if (squad.instructions.length === 0) return null;
+
+  let currentList = squad.instructions;
+  for (const frame of squad.executionStack) {
+    const loc = findInstructionLocation(currentList, frame.instructionId);
+    if (!loc) return null;
+    const inst = loc.list[loc.index];
+    if (inst.type === 'LOOP') {
+      currentList = inst.children ?? [];
+    } else if (inst.type === 'IF') {
+      const condMet = evaluateConditionForBug(inst.condition!, inst.conditionParam, state, squad, bug);
+      currentList = condMet ? (inst.children ?? []) : (inst.elseChildren ?? []);
+    }
+  }
+
+  return getFirstLeafFromList(currentList);
 }

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { GameStore, Instruction, InstructionType, InstructionPreset, Squad } from '../game/types';
+import type { GameStore, Instruction, InstructionType, InstructionPreset, Squad, ConditionType } from '../game/types';
 import type { Bug, Enemy, PheromoneMap, Mutation } from '../game/types';
 import {
   createInitialState,
@@ -8,8 +8,11 @@ import {
   createBug,
   updateLevelProgress,
   DEFAULT_SQUAD_COLORS,
+  stepSquadInstructions,
+  createSquadInstructionId,
+  getActiveExecutableInstruction,
 } from '../game/engine';
-import { INSTRUCTION_META } from '../game/types';
+import { INSTRUCTION_META, CONDITION_LABELS } from '../game/types';
 import { createEventRecorder } from '../game/eventRecorder';
 import type { EventRecorderAPI } from '../game/types';
 
@@ -38,25 +41,153 @@ function savePresetsToStorage(presets: InstructionPreset[]) {
   }
 }
 
-function validateInstructions(instructions: unknown): instructions is Instruction[] {
-  if (!Array.isArray(instructions)) return false;
-  return instructions.every((inst) => {
-    if (!inst || typeof inst !== 'object') return false;
-    const i = inst as Record<string, unknown>;
-    if (typeof i.id !== 'string') return false;
-    if (typeof i.type !== 'string') return false;
-    if (typeof i.duration !== 'number') return false;
-    if (!Object.keys(INSTRUCTION_META).includes(i.type as string)) return false;
-    if (i.param !== undefined && typeof i.param !== 'number') return false;
-    return true;
-  });
+function validateInstruction(inst: unknown): boolean {
+  if (!inst || typeof inst !== 'object') return false;
+  const i = inst as Record<string, unknown>;
+  if (typeof i.id !== 'string') return false;
+  if (typeof i.type !== 'string') return false;
+  if (typeof i.duration !== 'number') return false;
+  if (!Object.keys(INSTRUCTION_META).includes(i.type as string)) return false;
+  if (i.param !== undefined && typeof i.param !== 'number') return false;
+  if (i.conditionParam !== undefined && typeof i.conditionParam !== 'number') return false;
+  if (i.children !== undefined) {
+    if (!Array.isArray(i.children)) return false;
+    if (!i.children.every((c: unknown) => validateInstruction(c))) return false;
+  }
+  if (i.elseChildren !== undefined) {
+    if (!Array.isArray(i.elseChildren)) return false;
+    if (!i.elseChildren.every((c: unknown) => validateInstruction(c))) return false;
+  }
+  return true;
 }
 
-function regenerateInstructionIds(instructions: Instruction[]): Instruction[] {
+function validateInstructions(instructions: unknown): instructions is Instruction[] {
+  if (!Array.isArray(instructions)) return false;
+  return instructions.every((inst) => validateInstruction(inst));
+}
+
+function regenerateInstructionIdsRecursive(instructions: Instruction[]): Instruction[] {
   return instructions.map((inst) => ({
     ...inst,
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}-${Math.random().toString(36).slice(2, 6)}`,
+    children: inst.children ? regenerateInstructionIdsRecursive(inst.children) : undefined,
+    elseChildren: inst.elseChildren ? regenerateInstructionIdsRecursive(inst.elseChildren) : undefined,
   }));
+}
+
+function regenerateInstructionIds(instructions: Instruction[]): Instruction[] {
+  return regenerateInstructionIdsRecursive(instructions);
+}
+
+function findInstructionById(instructions: Instruction[], id: string): Instruction | null {
+  for (const inst of instructions) {
+    if (inst.id === id) return inst;
+    if (inst.children) {
+      const found = findInstructionById(inst.children, id);
+      if (found) return found;
+    }
+    if (inst.elseChildren) {
+      const found = findInstructionById(inst.elseChildren, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function findFirstLeafInstruction(instructions: Instruction[]): Instruction | null {
+  if (instructions.length === 0) return null;
+  const first = instructions[0];
+  if (first.type === 'IF' || first.type === 'LOOP') {
+    return findFirstLeafInstruction(first.children ?? []);
+  }
+  return first;
+}
+
+function updateInstructionRecursive(instructions: Instruction[], id: string, updates: Partial<Instruction>): boolean {
+  for (let i = 0; i < instructions.length; i++) {
+    if (instructions[i].id === id) {
+      instructions[i] = { ...instructions[i], ...updates };
+      return true;
+    }
+    if (instructions[i].children) {
+      if (updateInstructionRecursive(instructions[i].children!, id, updates)) return true;
+    }
+    if (instructions[i].elseChildren) {
+      if (updateInstructionRecursive(instructions[i].elseChildren!, id, updates)) return true;
+    }
+  }
+  return false;
+}
+
+function removeInstructionById(instructions: Instruction[], id: string): boolean {
+  for (let i = 0; i < instructions.length; i++) {
+    if (instructions[i].id === id) {
+      instructions.splice(i, 1);
+      return true;
+    }
+    if (instructions[i].children) {
+      if (removeInstructionById(instructions[i].children!, id)) return true;
+    }
+    if (instructions[i].elseChildren) {
+      if (removeInstructionById(instructions[i].elseChildren!, id)) return true;
+    }
+  }
+  return false;
+}
+
+interface SerializedInstruction {
+  t: string;
+  p?: number;
+  du: number;
+  c?: ConditionType;
+  cp?: number;
+  ch?: SerializedInstruction[];
+  ech?: SerializedInstruction[];
+}
+
+function serializeInstructions(instructions: Instruction[]): SerializedInstruction[] {
+  return instructions.map((inst) => ({
+    t: inst.type,
+    p: inst.param,
+    du: inst.duration,
+    c: inst.condition,
+    cp: inst.conditionParam,
+    ch: inst.children ? serializeInstructions(inst.children) : undefined,
+    ech: inst.elseChildren ? serializeInstructions(inst.elseChildren) : undefined,
+  }));
+}
+
+function deserializeInstructions(
+  serialized: SerializedInstruction[],
+  prefix: string,
+  startIdx: { v: number }
+): Instruction[] {
+  return serialized.map((item) => {
+    const idx = startIdx.v++;
+    const meta = INSTRUCTION_META[item.t as InstructionType];
+    const inst: Instruction = {
+      id: `${prefix}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+      type: item.t as InstructionType,
+      duration: Math.max(meta?.durationMin ?? 0, Math.min(meta?.durationMax ?? 9999, Math.floor(item.du))),
+      collapsed: false,
+    };
+    if (meta?.hasParam && typeof item.p === 'number') {
+      inst.param = Math.max(meta.paramMin ?? 0, Math.min(meta.paramMax ?? 9999, Math.floor(item.p)));
+    }
+    if (item.c) {
+      inst.condition = item.c;
+    }
+    if (typeof item.cp === 'number') {
+      inst.conditionParam = item.cp;
+    }
+    if (item.ch && Array.isArray(item.ch)) {
+      inst.children = deserializeInstructions(item.ch, prefix, startIdx);
+    }
+    if (item.ech && Array.isArray(item.ech)) {
+      inst.elseChildren = deserializeInstructions(item.ech, prefix, startIdx);
+    }
+    return inst;
+  });
 }
 
 const eventRecorderInstance: EventRecorderAPI = createEventRecorder();
@@ -85,10 +216,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set({ state: { ...state, pheromoneMap: emptyMap } });
   },
 
-  addInstruction: (type, index) => {
+  addInstruction: (type, index, parentId, branch) => {
     const { state } = get();
     const squadId = state.currentSquadId;
-    get().addSquadInstruction(squadId, type, index);
+    get().addSquadInstruction(squadId, type, index, parentId, branch);
   },
 
   removeInstruction: (id) => {
@@ -109,6 +240,18 @@ export const useGameStore = create<GameStore>((set, get) => ({
     get().setSquadInstructions(squadId, instructions);
   },
 
+  updateInstruction: (instructionId, updates) => {
+    const { state } = get();
+    const squadId = state.currentSquadId;
+    get().updateSquadInstruction(squadId, instructionId, updates);
+  },
+
+  toggleInstructionCollapsed: (instructionId) => {
+    const { state } = get();
+    const squadId = state.currentSquadId;
+    get().toggleSquadInstructionCollapsed(squadId, instructionId);
+  },
+
   setPaused: (paused) => set((s) => ({ state: { ...s.state, paused } })),
 
   setSpeed: (speed) => set((s) => ({ state: { ...s.state, speed } })),
@@ -119,25 +262,22 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (eventRecorder.history.isRewinding) return;
 
     let newState = { ...state };
-    const newSquads = newState.squads.map(s => ({ ...s, instructions: [...s.instructions] }));
+    const newSquads = newState.squads.map(s => ({
+      ...s,
+      instructions: JSON.parse(JSON.stringify(s.instructions)),
+      executionStack: s.executionStack.map(f => ({ ...f })),
+    }));
 
     for (const squad of newSquads) {
-      const squadInst = squad.instructions;
-      if (squadInst.length > 0) {
-        if (squad.instructionTimer <= 0) {
-          squad.instructionTimer = squadInst[0].duration;
-        }
-        squad.instructionTimer--;
-        if (squad.instructionTimer <= 0) {
-          squadInst.shift();
-          if (squadInst.length > 0) {
-            eventRecorder.recordEvent('instruction_switch', {
-              squadId: squad.id,
-              squadName: squad.name,
-              nextType: squadInst[0].type,
-              remaining: squadInst.length,
-            });
-          }
+      if (squad.instructions.length > 0) {
+        const result = stepSquadInstructions(squad, newState);
+        if (result.instructionSwitched && result.nextType) {
+          eventRecorder.recordEvent('instruction_switch', {
+            squadId: squad.id,
+            squadName: squad.name,
+            nextType: result.nextType,
+            remaining: result.remainingCount ?? 0,
+          });
         }
       }
     }
@@ -346,10 +486,11 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const preset = presets.find((p) => p.id === id);
     if (!preset) return;
     const loadedInstructions = regenerateInstructionIds(preset.instructions);
-    const newTimer = loadedInstructions.length > 0 ? loadedInstructions[0].duration : 0;
+    const firstLeaf = findFirstLeafInstruction(loadedInstructions);
+    const newTimer = firstLeaf ? firstLeaf.duration : 0;
     const newSquads = state.squads.map(sq => {
       if (sq.id === state.currentSquadId) {
-        return { ...sq, instructions: loadedInstructions, instructionTimer: newTimer };
+        return { ...sq, instructions: loadedInstructions, instructionTimer: newTimer, executionStack: [] };
       }
       return sq;
     });
@@ -389,14 +530,10 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const preset = presets.find((p) => p.id === id);
     if (!preset) return '';
     const exportData = {
-      v: 1,
+      v: 2,
       n: preset.name,
       d: preset.description,
-      i: preset.instructions.map((inst) => ({
-        t: inst.type,
-        p: inst.param,
-        du: inst.duration,
-      })),
+      i: serializeInstructions(preset.instructions),
     };
     const jsonStr = JSON.stringify(exportData);
     try {
@@ -425,26 +562,16 @@ export const useGameStore = create<GameStore>((set, get) => ({
       }
       if (!parsed || typeof parsed !== 'object') return null;
       const p = parsed as Record<string, unknown>;
-      if (p.v !== 1) return null;
+      if (typeof p.v !== 'number') return null;
       if (typeof p.n !== 'string') return null;
       if (typeof p.d !== 'string') return null;
       if (!Array.isArray(p.i)) return null;
 
-      const importedInstructions: Instruction[] = (p.i as Array<Record<string, unknown>>)
-        .map((item, idx) => {
-          if (!item || typeof item.t !== 'string' || typeof item.du !== 'number') return null;
-          if (!Object.keys(INSTRUCTION_META).includes(item.t as string)) return null;
-          const meta = INSTRUCTION_META[item.t as InstructionType];
-          return {
-            id: `imported-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-            type: item.t as InstructionType,
-            duration: Math.max(meta.durationMin, Math.min(meta.durationMax, Math.floor(item.du))),
-            ...(meta.hasParam && typeof item.p === 'number'
-              ? { param: Math.max(meta.paramMin ?? 0, Math.min(meta.paramMax ?? 100, Math.floor(item.p))) }
-              : {}),
-          } as Instruction;
-        })
-        .filter((inst): inst is Instruction => inst !== null);
+      const importedInstructions: Instruction[] = deserializeInstructions(
+        p.i as SerializedInstruction[],
+        `imported-${Date.now()}`,
+        { v: 0 }
+      );
 
       if (importedInstructions.length === 0) return null;
 
@@ -573,6 +700,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
       color: availableColor,
       instructions: [],
       instructionTimer: 0,
+      executionStack: [],
       createdAt: Date.now(),
     };
     set(prev => ({
@@ -636,8 +764,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     set(prev => {
       const newSquads = prev.state.squads.map(s => {
         if (s.id !== squadId) return s;
-        const newTimer = instructions.length > 0 ? instructions[0].duration : 0;
-        return { ...s, instructions, instructionTimer: newTimer };
+        const firstLeaf = findFirstLeafInstruction(instructions);
+        const newTimer = firstLeaf ? firstLeaf.duration : 0;
+        return { ...s, instructions, instructionTimer: newTimer, executionStack: [] };
       });
       const newState = { ...prev.state, squads: newSquads };
       if (prev.state.currentSquadId === squadId) {
@@ -647,26 +776,44 @@ export const useGameStore = create<GameStore>((set, get) => ({
     });
   },
 
-  addSquadInstruction: (squadId, type, index) => {
+  addSquadInstruction: (squadId, type, index, parentId, branch) => {
     const { state } = get();
     const meta = INSTRUCTION_META[type];
+    const defaultCondition: ConditionType = 'ENEMY_NEARBY';
+    const conditionMeta = CONDITION_LABELS[defaultCondition];
     const newInst: Instruction = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      id: createSquadInstructionId(),
       type,
       duration: meta.durationDefault,
       ...(meta.hasParam ? { param: meta.paramDefault } : {}),
+      ...(type === 'IF' ? { condition: defaultCondition, conditionParam: conditionMeta.paramDefault, children: [], elseChildren: [] } : {}),
+      ...(type === 'LOOP' ? { children: [] } : {}),
+      collapsed: false,
     };
     const squad = state.squads.find(s => s.id === squadId);
     if (!squad) return;
-    const newList = [...squad.instructions];
-    if (index !== undefined) {
-      newList.splice(index, 0, newInst);
+    let newList = JSON.parse(JSON.stringify(squad.instructions)) as Instruction[];
+    if (parentId) {
+      const parent = findInstructionById(newList, parentId);
+      if (parent) {
+        const targetList = branch === 'else' ? (parent.elseChildren ??= []) : (parent.children ??= []);
+        if (index !== undefined) {
+          targetList.splice(index, 0, newInst);
+        } else {
+          targetList.push(newInst);
+        }
+      }
     } else {
-      newList.push(newInst);
+      if (index !== undefined) {
+        newList.splice(index, 0, newInst);
+      } else {
+        newList.push(newInst);
+      }
     }
     let newTimer = squad.instructionTimer;
-    if (newList.length > 0 && newTimer <= 0) {
-      newTimer = newList[0].duration;
+    if (newTimer <= 0) {
+      const firstLeaf = findFirstLeafInstruction(newList);
+      if (firstLeaf) newTimer = firstLeaf.duration;
     }
     const newSquads = state.squads.map(s =>
       s.id === squadId ? { ...s, instructions: newList, instructionTimer: newTimer } : s
@@ -683,14 +830,17 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const { state } = get();
     const squad = state.squads.find(s => s.id === squadId);
     if (!squad) return;
-    const targetIndex = squad.instructions.findIndex((i) => i.id === instructionId);
-    const newList = squad.instructions.filter((i) => i.id !== instructionId);
+    const newList = JSON.parse(JSON.stringify(squad.instructions)) as Instruction[];
+    removeInstructionById(newList, instructionId);
     let newTimer = squad.instructionTimer;
-    if (targetIndex === 0) {
-      newTimer = newList.length > 0 ? newList[0].duration : 0;
+    const firstLeaf = findFirstLeafInstruction(newList);
+    if (!firstLeaf) {
+      newTimer = 0;
+    } else if (squad.instructionTimer <= 0) {
+      newTimer = firstLeaf.duration;
     }
     const newSquads = state.squads.map(s =>
-      s.id === squadId ? { ...s, instructions: newList, instructionTimer: newTimer } : s
+      s.id === squadId ? { ...s, instructions: newList, instructionTimer: newTimer, executionStack: [] } : s
     );
     const newState = { ...state, squads: newSquads };
     if (state.currentSquadId === squadId) {
@@ -698,6 +848,32 @@ export const useGameStore = create<GameStore>((set, get) => ({
     } else {
       set({ state: newState });
     }
+  },
+
+  updateSquadInstruction: (squadId, instructionId, updates) => {
+    const { state } = get();
+    const squad = state.squads.find(s => s.id === squadId);
+    if (!squad) return;
+    const newList = JSON.parse(JSON.stringify(squad.instructions)) as Instruction[];
+    updateInstructionRecursive(newList, instructionId, updates);
+    const newSquads = state.squads.map(s =>
+      s.id === squadId ? { ...s, instructions: newList } : s
+    );
+    const newState = { ...state, squads: newSquads };
+    if (state.currentSquadId === squadId) {
+      set({ state: newState, instructions: newList });
+    } else {
+      set({ state: newState });
+    }
+  },
+
+  toggleSquadInstructionCollapsed: (squadId, instructionId) => {
+    const { state } = get();
+    const squad = state.squads.find(s => s.id === squadId);
+    if (!squad) return;
+    const target = findInstructionById(squad.instructions, instructionId);
+    if (!target) return;
+    get().updateSquadInstruction(squadId, instructionId, { collapsed: !target.collapsed });
   },
 
   moveSquadInstruction: (squadId, from, to) => {
