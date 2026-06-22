@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useGameStore } from '@/store/gameStore';
 import { GRID_CONSTANTS } from '@/game/engine';
-import type { TerrainType, Bug, Enemy, ResourceNode, GameState } from '@/game/types';
+import type { TerrainType, Bug, Enemy, ResourceNode, GameState, PheromoneMap } from '@/game/types';
 
 const { GRID_W, GRID_H, CELL } = GRID_CONSTANTS;
 const CANVAS_W = GRID_W * CELL;
@@ -35,6 +35,72 @@ function safeArc(
   ctx.arc(x, y, radius, s, e);
 }
 
+function heatColor(strength: number): [number, number, number] {
+  const t = Math.max(0, Math.min(1, strength));
+  if (t < 0.25) {
+    const k = t / 0.25;
+    return [
+      Math.floor(10 + k * 20),
+      Math.floor(30 + k * 50),
+      Math.floor(80 + k * 120),
+    ];
+  } else if (t < 0.5) {
+    const k = (t - 0.25) / 0.25;
+    return [
+      Math.floor(30 + k * 40),
+      Math.floor(80 + k * 100),
+      Math.floor(200 - k * 40),
+    ];
+  } else if (t < 0.75) {
+    const k = (t - 0.5) / 0.25;
+    return [
+      Math.floor(70 + k * 150),
+      Math.floor(180 + k * 50),
+      Math.floor(160 - k * 100),
+    ];
+  } else {
+    const k = (t - 0.75) / 0.25;
+    return [
+      Math.floor(220 + k * 35),
+      Math.floor(230 - k * 100),
+      Math.floor(60 - k * 40),
+    ];
+  }
+}
+
+function drawPheromoneHeatmap(ctx: CanvasRenderingContext2D, map: PheromoneMap, tick: number) {
+  const pulse = 0.92 + Math.sin(tick * 0.04) * 0.08;
+  const cs = map.cellSize;
+
+  for (let y = 0; y < map.height; y++) {
+    for (let x = 0; x < map.width; x++) {
+      const cell = map.cells[y][x];
+      if (cell.strength <= 0.01) continue;
+
+      const normStrength = cell.strength / map.maxStrength;
+      if (normStrength < 0.02) continue;
+
+      const [r, g, b] = heatColor(normStrength);
+      const alpha = Math.min(0.55, normStrength * 0.85) * pulse;
+
+      ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${alpha})`;
+      ctx.fillRect(x * cs, y * cs, cs + 0.5, cs + 0.5);
+
+      if (normStrength > 0.5) {
+        const glowAlpha = Math.min(0.25, (normStrength - 0.5) * 0.7) * pulse;
+        const gradient = ctx.createRadialGradient(
+          x * cs + cs / 2, y * cs + cs / 2, 0,
+          x * cs + cs / 2, y * cs + cs / 2, cs * 2.5
+        );
+        gradient.addColorStop(0, `rgba(${r}, ${g}, ${b}, ${glowAlpha})`);
+        gradient.addColorStop(1, `rgba(${r}, ${g}, ${b}, 0)`);
+        ctx.fillStyle = gradient;
+        ctx.fillRect(x * cs - cs * 2, y * cs - cs * 2, cs * 5, cs * 5);
+      }
+    }
+  }
+}
+
 export default function GameCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -47,6 +113,7 @@ export default function GameCanvas() {
   const isRewindingRef = useRef(false);
   const rewindTickRef = useRef<number | null>(null);
   const latestTickRef = useRef(0);
+  const showPheromoneRef = useRef(false);
 
   useEffect(() => {
     const unsub = useGameStore.subscribe((s) => {
@@ -56,6 +123,7 @@ export default function GameCanvas() {
       isRewindingRef.current = s.eventRecorder.history.isRewinding;
       rewindTickRef.current = s.eventRecorder.history.rewindTick;
       latestTickRef.current = s.eventRecorder.history.currentTick;
+      showPheromoneRef.current = s.showPheromoneLayer;
     });
     return unsub;
   }, []);
@@ -143,6 +211,10 @@ export default function GameCanvas() {
       safeArc(ctx, nestPos.x, nestPos.y, 10); ctx.fill();
       ctx.fillStyle = '#fde68a';
       safeArc(ctx, nestPos.x, nestPos.y, 4); ctx.fill();
+
+      if (showPheromoneRef.current) {
+        drawPheromoneHeatmap(ctx, state.pheromoneMap, tick);
+      }
 
       for (const r of resources) drawResource(ctx, r, tick);
       for (const e of enemies) drawEnemy(ctx, e, tick);

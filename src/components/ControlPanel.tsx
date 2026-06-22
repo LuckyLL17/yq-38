@@ -1,5 +1,5 @@
 import { useGameStore } from '@/store/gameStore';
-import { Play, Pause, SkipForward, RotateCcw, Zap, FastForward, History, X } from 'lucide-react';
+import { Play, Pause, SkipForward, RotateCcw, Zap, FastForward, History, X, Thermometer, Trash2 } from 'lucide-react';
 import PresetManager from './PresetManager';
 
 const SPEEDS = [
@@ -10,7 +10,7 @@ const SPEEDS = [
 ];
 
 export default function ControlPanel() {
-  const { state, setPaused, setSpeed, resetLevel, eventRecorder, toggleRewindMode, seekToTick } = useGameStore();
+  const { state, setPaused, setSpeed, resetLevel, eventRecorder, toggleRewindMode, seekToTick, showPheromoneLayer, togglePheromoneLayer, clearPheromones } = useGameStore();
   const isRewinding = eventRecorder.history.isRewinding;
   const latestTick = eventRecorder.history.currentTick;
   const rewindTick = eventRecorder.history.rewindTick ?? state.tick;
@@ -72,6 +72,33 @@ export default function ControlPanel() {
           </>
         )}
       </button>
+
+      <div className="flex items-center gap-1 px-1.5 py-1 rounded-lg border border-white/10 bg-black/30">
+        <button
+          onClick={togglePheromoneLayer}
+          className={`relative flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold transition-all ${
+            showPheromoneLayer
+              ? 'bg-gradient-to-r from-cyan-500/30 to-purple-500/30 text-cyan-300 shadow-[inset_0_0_10px_rgba(34,211,238,0.25)] border border-cyan-500/40'
+              : 'text-white/50 hover:text-white/80 hover:bg-white/5'
+          }`}
+          title="信息素热力图：显示虫群活动密度轨迹"
+        >
+          <Thermometer size={14} className={showPheromoneLayer ? 'animate-pulse' : ''} />
+          <span>信息素</span>
+        </button>
+        <button
+          onClick={clearPheromones}
+          disabled={!showPheromoneLayer}
+          className={`flex items-center gap-1 px-2 py-1.5 rounded-md text-xs font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed ${
+            showPheromoneLayer
+              ? 'text-rose-400/70 hover:text-rose-300 hover:bg-rose-500/10'
+              : 'text-white/20'
+          }`}
+          title="清除所有信息素痕迹"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
 
       <div className="flex items-center gap-1 px-1.5 py-1 rounded-lg border border-white/10 bg-black/30">
         {SPEEDS.map((s) => (

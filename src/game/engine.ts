@@ -8,11 +8,82 @@ import type {
   Particle,
   Instruction,
   TerrainType,
+  PheromoneMap,
+  PheromoneCell,
 } from './types';
 
 const GRID_W = 60;
 const GRID_H = 40;
 const CELL = 16;
+
+const PHEROMONE_CELL = 8;
+const PHEROMONE_DECAY = 0.008;
+const PHEROMONE_DEPOSIT = 0.15;
+const PHEROMONE_MAX = 5.0;
+
+function createPheromoneMap(): PheromoneMap {
+  const pw = Math.ceil((GRID_W * CELL) / PHEROMONE_CELL);
+  const ph = Math.ceil((GRID_H * CELL) / PHEROMONE_CELL);
+  const cells: PheromoneCell[][] = [];
+  for (let y = 0; y < ph; y++) {
+    cells[y] = [];
+    for (let x = 0; x < pw; x++) {
+      cells[y][x] = { strength: 0, age: 0 };
+    }
+  }
+  return {
+    width: pw,
+    height: ph,
+    cellSize: PHEROMONE_CELL,
+    cells,
+    decayRate: PHEROMONE_DECAY,
+    depositAmount: PHEROMONE_DEPOSIT,
+    maxStrength: PHEROMONE_MAX,
+  };
+}
+
+function depositPheromone(
+  map: PheromoneMap,
+  x: number,
+  y: number,
+  amount?: number
+) {
+  const px = clamp(Math.floor(x / map.cellSize), 0, map.width - 1);
+  const py = clamp(Math.floor(y / map.cellSize), 0, map.height - 1);
+  const cell = map.cells[py][px];
+  const dep = amount ?? map.depositAmount;
+  cell.strength = Math.min(map.maxStrength, cell.strength + dep);
+  cell.age = 0;
+  const neighbors = [
+    [px - 1, py], [px + 1, py], [px, py - 1], [px, py + 1],
+    [px - 1, py - 1], [px + 1, py - 1], [px - 1, py + 1], [px + 1, py + 1],
+  ];
+  for (const [nx, ny] of neighbors) {
+    if (nx >= 0 && nx < map.width && ny >= 0 && ny < map.height) {
+      const nc = map.cells[ny][nx];
+      nc.strength = Math.min(map.maxStrength, nc.strength + dep * 0.35);
+    }
+  }
+}
+
+function decayPheromones(map: PheromoneMap) {
+  for (let y = 0; y < map.height; y++) {
+    for (let x = 0; x < map.width; x++) {
+      const cell = map.cells[y][x];
+      if (cell.strength > 0) {
+        cell.strength = Math.max(0, cell.strength - map.decayRate);
+        cell.age++;
+      }
+    }
+  }
+}
+
+function clonePheromoneMap(map: PheromoneMap): PheromoneMap {
+  return {
+    ...map,
+    cells: map.cells.map(row => row.map(cell => ({ ...cell }))),
+  };
+}
 
 function rand(min: number, max: number) {
   return Math.random() * (max - min) + min;
@@ -218,6 +289,7 @@ export function simulateStep(
   const { terrain, nestPos } = state;
   const newParticles = [...state.particles];
   const pid = { v: (state.particles[state.particles.length - 1]?.id ?? 0) + 1 };
+  const newPheromoneMap = clonePheromoneMap(state.pheromoneMap);
 
   const deltaFood = { v: 0 };
   const deltaCrystal = { v: 0 };
@@ -473,6 +545,9 @@ export function simulateStep(
     if (dist(bug.pos, nestPos) < 25) {
       bug.hp = Math.min(bug.maxHp, bug.hp + 0.15);
     }
+
+    const depositMul = bug.role === 'scout' ? 1.4 : bug.role === 'soldier' ? 1.1 : 1.0;
+    depositPheromone(newPheromoneMap, bug.pos.x, bug.pos.y, newPheromoneMap.depositAmount * depositMul);
   }
 
   for (const enemy of newEnemies) {
@@ -537,12 +612,15 @@ export function simulateStep(
   }
   const aliveParticles = newParticles.filter(p => p.life > 0);
 
+  decayPheromones(newPheromoneMap);
+
   return {
     ...state,
     bugs: survivedBugs,
     enemies: survivedEnemies,
     resources: aliveResources,
     particles: aliveParticles,
+    pheromoneMap: newPheromoneMap,
     tick: state.tick + 1,
     gameTime: state.gameTime + state.speed,
     totalFood: state.totalFood + deltaFood.v,
@@ -623,6 +701,7 @@ export function createInitialState(level: number): GameState {
     levelTarget: lv.target,
     levelProgress: initialProgress,
     levelComplete: false,
+    pheromoneMap: createPheromoneMap(),
   };
 }
 

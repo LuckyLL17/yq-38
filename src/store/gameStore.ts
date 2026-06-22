@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { GameStore, Instruction, InstructionType, InstructionPreset } from '../game/types';
-import type { Bug, Enemy } from '../game/types';
+import type { Bug, Enemy, PheromoneMap } from '../game/types';
 import {
   createInitialState,
   simulateStep,
@@ -65,10 +65,26 @@ export const useGameStore = create<GameStore>((set, get) => ({
   instructions: [],
   presets: loadPresetsFromStorage(),
   eventRecorder: eventRecorderInstance,
+  showPheromoneLayer: false,
 
   setState: (partial) => set((s) => ({ state: { ...s.state, ...partial } })),
 
   setInstructions: (instructions) => set({ instructions }),
+
+  togglePheromoneLayer: () => set((s) => ({ showPheromoneLayer: !s.showPheromoneLayer })),
+
+  setShowPheromoneLayer: (show) => set({ showPheromoneLayer: show }),
+
+  clearPheromones: () => {
+    const { state } = get();
+    const emptyMap: PheromoneMap = {
+      ...state.pheromoneMap,
+      cells: state.pheromoneMap.cells.map(row =>
+        row.map(cell => ({ strength: 0, age: 0 }))
+      ),
+    };
+    set({ state: { ...state, pheromoneMap: emptyMap } });
+  },
 
   addInstruction: (type, index) => {
     const { instructions, state } = get();

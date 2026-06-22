@@ -69,6 +69,21 @@ export interface Particle {
   size: number;
 }
 
+export interface PheromoneCell {
+  strength: number;
+  age: number;
+}
+
+export interface PheromoneMap {
+  width: number;
+  height: number;
+  cellSize: number;
+  cells: PheromoneCell[][];
+  decayRate: number;
+  depositAmount: number;
+  maxStrength: number;
+}
+
 export interface GameState {
   bugs: Bug[];
   enemies: Enemy[];
@@ -95,6 +110,7 @@ export interface GameState {
   levelTarget: number;
   levelProgress: number;
   levelComplete: boolean;
+  pheromoneMap: PheromoneMap;
 }
 
 export interface InstructionPreset {
@@ -156,6 +172,7 @@ export interface GameStore {
   instructions: Instruction[];
   presets: InstructionPreset[];
   eventRecorder: EventRecorderAPI;
+  showPheromoneLayer: boolean;
   setState: (state: Partial<GameState>) => void;
   setInstructions: (instructions: Instruction[]) => void;
   addInstruction: (type: InstructionType, index?: number) => void;
@@ -163,6 +180,9 @@ export interface GameStore {
   moveInstruction: (from: number, to: number) => void;
   setPaused: (paused: boolean) => void;
   setSpeed: (speed: number) => void;
+  togglePheromoneLayer: () => void;
+  setShowPheromoneLayer: (show: boolean) => void;
+  clearPheromones: () => void;
   step: () => void;
   resetLevel: () => void;
   nextLevel: () => void;
