@@ -97,9 +97,19 @@ export interface GameState {
   levelComplete: boolean;
 }
 
+export interface InstructionPreset {
+  id: string;
+  name: string;
+  description: string;
+  instructions: Instruction[];
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface GameStore {
   state: GameState;
   instructions: Instruction[];
+  presets: InstructionPreset[];
   setState: (state: Partial<GameState>) => void;
   setInstructions: (instructions: Instruction[]) => void;
   addInstruction: (type: InstructionType, index?: number) => void;
@@ -111,6 +121,14 @@ export interface GameStore {
   resetLevel: () => void;
   nextLevel: () => void;
   spawnInitialSwarm: () => void;
+  savePreset: (name: string, description?: string) => void;
+  loadPreset: (id: string) => void;
+  deletePreset: (id: string) => void;
+  renamePreset: (id: string, name: string) => void;
+  updatePresetDescription: (id: string, description: string) => void;
+  exportPreset: (id: string) => string;
+  importPreset: (data: string) => InstructionPreset | null;
+  pastePresetFromClipboard: (text: string) => InstructionPreset | null;
 }
 
 export const INSTRUCTION_META: Record<InstructionType, {

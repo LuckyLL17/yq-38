@@ -1,5 +1,6 @@
 import { useGameStore } from '@/store/gameStore';
 import { Play, Pause, SkipForward, RotateCcw, Zap, FastForward } from 'lucide-react';
+import PresetManager from './PresetManager';
 
 const SPEEDS = [
   { label: '0.5x', value: 0.5, icon: <Zap size={14} /> },
@@ -50,6 +51,10 @@ export default function ControlPanel() {
           </button>
         ))}
       </div>
+
+      <div className="w-px h-8 bg-white/10" />
+
+      <PresetManager />
 
       <div className="flex-1" />
 
