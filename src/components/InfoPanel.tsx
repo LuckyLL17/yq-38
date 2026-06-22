@@ -1,10 +1,10 @@
 import { useGameStore } from '@/store/gameStore';
-import { Bug, Skull, Leaf, Gem, Target, TrendingUp, Sparkles, Zap } from 'lucide-react';
-import { INSTRUCTION_META, MUTATION_LIBRARY, RARITY_LABEL } from '@/game/types';
+import { Bug, Skull, Leaf, Gem, Target, TrendingUp, Sparkles, Zap, Sun, Moon, Cloud, CloudRain, CloudLightning, Wind } from 'lucide-react';
+import { INSTRUCTION_META, MUTATION_LIBRARY, RARITY_LABEL, TIME_OF_DAY_LABELS, WEATHER_LABELS } from '@/game/types';
 
 export default function InfoPanel() {
   const { state } = useGameStore();
-  const { bugs, levelObjective, levelProgress, levelTarget, totalFood, totalCrystal, enemiesKilled, resources, squads, evolution } = state;
+  const { bugs, levelObjective, levelProgress, levelTarget, totalFood, totalCrystal, enemiesKilled, resources, squads, evolution, timeCycle } = state;
 
   const roles = {
     worker: bugs.filter((b) => b.role === 'worker').length,
@@ -52,6 +52,8 @@ export default function InfoPanel() {
         </div>
 
         <EvolutionCard evolution={evolution} bugs={bugs} />
+
+        <TimeWeatherCard timeCycle={timeCycle} />
 
         <div className="grid grid-cols-2 gap-2">
           <StatCard icon={<Bug size={13} />} label="虫群规模" value={bugs.length} sub={`工${roles.worker}·兵${roles.soldier}·侦${roles.scout}`} color="#34d399" />
@@ -303,6 +305,171 @@ function MiniStat({ label, value, color }: { label: string; value: string; color
       <div className="text-sm font-black font-mono leading-none" style={{ color, textShadow: `0 0 6px ${color}50` }}>
         {value}
       </div>
+    </div>
+  );
+}
+
+function TimeWeatherCard({ timeCycle }: { timeCycle: import('@/game/types').TimeCycleState }) {
+  const { timeOfDay, currentWeather, dayCount, dayProgress, dayNightEffect, weatherEffect, weatherTimer, weatherDuration } = timeCycle;
+  const timeInfo = TIME_OF_DAY_LABELS[timeOfDay];
+  const weatherInfo = WEATHER_LABELS[currentWeather];
+  
+  const hours = Math.floor(dayProgress * 24);
+  const minutes = Math.floor((dayProgress * 24 - hours) * 60);
+  const weatherProgress = (weatherTimer / weatherDuration) * 100;
+
+  const getTimeIcon = () => {
+    switch (timeOfDay) {
+      case 'dawn': return <Sun size={14} />;
+      case 'day': return <Sun size={14} />;
+      case 'dusk': return <Sun size={14} />;
+      case 'night': return <Moon size={14} />;
+    }
+  };
+
+  const getWeatherIcon = () => {
+    switch (currentWeather) {
+      case 'sunny': return <Sun size={14} />;
+      case 'cloudy': return <Cloud size={14} />;
+      case 'rain': return <CloudRain size={14} />;
+      case 'fog': return <Wind size={14} />;
+      case 'storm': return <CloudLightning size={14} />;
+    }
+  };
+
+  const formatMul = (mul: number) => {
+    const pct = Math.round((mul - 1) * 100);
+    if (pct > 0) return `+${pct}%`;
+    if (pct < 0) return `${pct}%`;
+    return '±0%';
+  };
+
+  const getEffectColor = (mul: number) => {
+    if (mul > 1) return '#34d399';
+    if (mul < 1) return '#f87171';
+    return '#94a3b8';
+  };
+
+  return (
+    <div className="p-3 rounded-lg border border-sky-500/25 bg-gradient-to-br from-sky-500/10 via-blue-500/5 to-indigo-500/10">
+      <div className="flex items-center justify-between mb-2.5">
+        <div className="flex items-center gap-2">
+          {getTimeIcon()}
+          <span className="text-xs font-bold text-sky-400 tracking-wider">时间循环</span>
+        </div>
+        <span className="px-2 py-0.5 rounded bg-sky-500/20 text-[10px] font-mono font-bold text-sky-300 border border-sky-500/30">
+          第{dayCount}天
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        <div className="p-2 rounded bg-black/30 border border-white/10">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <span style={{ color: timeInfo.color }}>{getTimeIcon()}</span>
+            <span className="text-[10px] font-bold tracking-wider" style={{ color: timeInfo.color }}>
+              {timeInfo.label}
+            </span>
+            <span className="ml-auto text-[10px] font-mono text-white/50">
+              {String(hours).padStart(2, '0')}:{String(minutes).padStart(2, '0')}
+            </span>
+          </div>
+          <div className="relative h-1.5 rounded-full bg-black/50 overflow-hidden">
+            <div
+              className="absolute inset-y-0 left-0 rounded-full transition-all duration-500"
+              style={{
+                width: `${dayProgress * 100}%`,
+                background: `linear-gradient(90deg, #fb923c, #fbbf24, #f472b6, #818cf8)`,
+              }}
+            />
+          </div>
+        </div>
+
+        <div className="p-2 rounded bg-black/30 border border-white/10">
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <span style={{ color: weatherInfo.color }}>{getWeatherIcon()}</span>
+            <span className="text-[10px] font-bold tracking-wider" style={{ color: weatherInfo.color }}>
+              {weatherInfo.label}
+            </span>
+            <span className="ml-auto text-[10px] font-mono text-white/50">
+              {Math.round(weatherProgress)}%
+            </span>
+          </div>
+          <div className="relative h-1.5 rounded-full bg-black/50 overflow-hidden">
+            <div
+              className="absolute inset-y-0 left-0 rounded-full transition-all duration-500"
+              style={{
+                width: `${weatherProgress}%`,
+                backgroundColor: weatherInfo.color,
+                opacity: 0.6,
+              }}
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="p-2 rounded bg-emerald-500/10 border border-emerald-500/20">
+          <div className="text-[10px] font-bold text-emerald-400 tracking-wider mb-1.5 flex items-center gap-1.5">
+            <Bug size={11} /> 昼夜对虫群影响
+          </div>
+          <div className="grid grid-cols-3 gap-1">
+            <EffectBadge label="速度" value={dayNightEffect.bugSpeedMul} formatMul={formatMul} getEffectColor={getEffectColor} />
+            <EffectBadge label="攻击" value={dayNightEffect.bugAttackMul} formatMul={formatMul} getEffectColor={getEffectColor} />
+            <EffectBadge label="防御" value={dayNightEffect.bugDefenseMul} formatMul={formatMul} getEffectColor={getEffectColor} />
+            <EffectBadge label="视野" value={dayNightEffect.bugVisionMul} formatMul={formatMul} getEffectColor={getEffectColor} />
+            <EffectBadge label="恢复" value={dayNightEffect.bugRegenMul} formatMul={formatMul} getEffectColor={getEffectColor} />
+          </div>
+        </div>
+
+        <div className="p-2 rounded bg-rose-500/10 border border-rose-500/20">
+          <div className="text-[10px] font-bold text-rose-400 tracking-wider mb-1.5 flex items-center gap-1.5">
+            <Skull size={11} /> 天气对敌人影响
+          </div>
+          <div className="grid grid-cols-3 gap-1">
+            <EffectBadge label="速度" value={weatherEffect.enemySpeedMul} formatMul={formatMul} getEffectColor={getEffectColor} inverse />
+            <EffectBadge label="攻击" value={weatherEffect.enemyAttackMul} formatMul={formatMul} getEffectColor={getEffectColor} inverse />
+            <EffectBadge label="视野" value={weatherEffect.enemyVisionMul} formatMul={formatMul} getEffectColor={getEffectColor} inverse />
+            <EffectBadge label="防御" value={weatherEffect.enemyDefenseMul} formatMul={formatMul} getEffectColor={getEffectColor} inverse />
+            <EffectBadge label="信息素" value={weatherEffect.pheromoneDecayMul} formatMul={formatMul} getEffectColor={getEffectColor} inverse special />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EffectBadge({
+  label,
+  value,
+  formatMul,
+  getEffectColor,
+  inverse = false,
+  special = false,
+}: {
+  label: string;
+  value: number;
+  formatMul: (v: number) => string;
+  getEffectColor: (v: number) => string;
+  inverse?: boolean;
+  special?: boolean;
+}) {
+  let displayValue = value;
+  if (special) {
+    displayValue = 1 / value;
+  }
+  let color = getEffectColor(displayValue);
+  if (inverse) {
+    if (displayValue > 1) color = '#f87171';
+    else if (displayValue < 1) color = '#34d399';
+    else color = '#94a3b8';
+  }
+  
+  return (
+    <div className="flex flex-col items-center p-1 rounded bg-black/30">
+      <span className="text-[8px] text-white/50 tracking-wider">{label}</span>
+      <span className="text-[10px] font-mono font-bold" style={{ color }}>
+        {formatMul(displayValue)}
+      </span>
     </div>
   );
 }

@@ -1,8 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { useGameStore } from '@/store/gameStore';
 import { GRID_CONSTANTS } from '@/game/engine';
-import type { TerrainType, Bug, Enemy, ResourceNode, GameState, PheromoneMap, Mutation } from '@/game/types';
-import { MUTATION_LIBRARY, RARITY_LABEL } from '@/game/types';
+import type { TerrainType, Bug, Enemy, ResourceNode, GameState, PheromoneMap, Mutation, TimeOfDay, WeatherType } from '@/game/types';
+import { MUTATION_LIBRARY, RARITY_LABEL, TIME_OF_DAY_LABELS, WEATHER_LABELS, TICKS_PER_DAY } from '@/game/types';
 
 const { GRID_W, GRID_H, CELL } = GRID_CONSTANTS;
 const CANVAS_W = GRID_W * CELL;
@@ -22,6 +22,24 @@ const BUG_COLORS = {
   soldier: { body: '#f472b6', glow: 'rgba(244, 114, 182, 0.5)', eye: '#4c0519' },
   scout: { body: '#22d3ee', glow: 'rgba(34, 211, 238, 0.45)', eye: '#083344' },
 };
+
+const DAY_NIGHT_COLORS: Record<TimeOfDay, { overlay: string; brightness: number; ambient: string }> = {
+  dawn: { overlay: 'rgba(251, 146, 60, 0.08)', brightness: 1.0, ambient: 'rgba(251, 191, 36, 0.03)' },
+  day: { overlay: 'rgba(255, 255, 255, 0.0)', brightness: 1.15, ambient: 'rgba(251, 191, 36, 0.02)' },
+  dusk: { overlay: 'rgba(244, 114, 182, 0.1)', brightness: 0.9, ambient: 'rgba(236, 72, 153, 0.03)' },
+  night: { overlay: 'rgba(30, 41, 59, 0.55)', brightness: 0.6, ambient: 'rgba(99, 102, 241, 0.05)' },
+};
+
+interface WeatherParticle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  type: 'rain' | 'fog' | 'spark';
+}
+
+const weatherParticlesRef = { current: [] as WeatherParticle[] };
 
 function safeArc(
   ctx: CanvasRenderingContext2D,
@@ -146,8 +164,11 @@ export default function GameCanvas() {
 
     const draw = (ctx: CanvasRenderingContext2D) => {
       const state = stateRef.current;
-      const { terrain, bugs, enemies, resources, particles, nestPos, tick, squads } = state;
+      const { terrain, bugs, enemies, resources, particles, nestPos, tick, squads, timeCycle } = state;
       const squadColorMap = new Map(squads.map(s => [s.id, s.color]));
+      const { timeOfDay, currentWeather, dayProgress, dayCount } = timeCycle;
+      const dayNightColors = DAY_NIGHT_COLORS[timeOfDay];
+      const weatherInfo = WEATHER_LABELS[currentWeather];
 
       ctx.fillStyle = '#050a08';
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -190,6 +211,8 @@ export default function GameCanvas() {
           }
         }
       }
+
+      updateAndDrawWeatherParticles(ctx, currentWeather, tick, CANVAS_W, CANVAS_H);
 
       const nestGlow = 0.5 + Math.sin(tick * 0.06) * 0.1;
       const gradient = ctx.createRadialGradient(
@@ -253,6 +276,18 @@ export default function GameCanvas() {
       ctx.strokeStyle = borderGrad;
       ctx.lineWidth = 2;
       ctx.strokeRect(1, 1, CANVAS_W - 2, CANVAS_H - 2);
+
+      ctx.fillStyle = dayNightColors.ambient;
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+      ctx.fillStyle = dayNightColors.overlay;
+      ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+      if (timeOfDay === 'night') {
+        drawStars(ctx, tick, CANVAS_W, CANVAS_H);
+      }
+
+      drawTimeWeatherIndicator(ctx, timeOfDay, currentWeather, dayProgress, dayCount, tick, CANVAS_W);
     };
 
     const loop = (t: number) => {
@@ -580,4 +615,184 @@ function drawResource(ctx: CanvasRenderingContext2D, r: ResourceNode, tick: numb
     ctx.fillStyle = color;
     ctx.fillRect(r.pos.x - w / 2, r.pos.y + 10, w * ratio, 2);
   }
+}
+
+function updateAndDrawWeatherParticles(
+  ctx: CanvasRenderingContext2D,
+  weather: WeatherType,
+  tick: number,
+  width: number,
+  height: number
+) {
+  const particles = weatherParticlesRef.current;
+
+  if (weather === 'rain' || weather === 'storm') {
+    const spawnRate = weather === 'storm' ? 4 : 2;
+    for (let i = 0; i < spawnRate; i++) {
+      particles.push({
+        x: Math.random() * width,
+        y: -10,
+        vx: weather === 'storm' ? -1.5 : -0.5,
+        vy: weather === 'storm' ? 8 : 5,
+        life: 200,
+        type: 'rain',
+      });
+    }
+  } else if (weather === 'fog') {
+    if (Math.random() < 0.1) {
+      particles.push({
+        x: Math.random() * width,
+        y: Math.random() * height,
+        vx: (Math.random() - 0.5) * 0.3,
+        vy: (Math.random() - 0.5) * 0.2,
+        life: 500,
+        type: 'fog',
+      });
+    }
+  }
+
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
+
+    if (p.life <= 0 || p.y > height + 20 || p.x < -20 || p.x > width + 20) {
+      particles.splice(i, 1);
+      continue;
+    }
+
+    const alpha = Math.min(1, p.life / 50);
+    if (p.type === 'rain') {
+      ctx.strokeStyle = weather === 'storm' 
+        ? `rgba(147, 197, 253, ${alpha * 0.8})`
+        : `rgba(147, 197, 253, ${alpha * 0.5})`;
+      ctx.lineWidth = weather === 'storm' ? 1.5 : 1;
+      ctx.beginPath();
+      ctx.moveTo(p.x, p.y);
+      ctx.lineTo(p.x + p.vx * 2, p.y + p.vy * 2);
+      ctx.stroke();
+    } else if (p.type === 'fog') {
+      const size = 30 + Math.sin(tick * 0.02 + p.x) * 10;
+      const grad = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, size);
+      grad.addColorStop(0, `rgba(203, 213, 225, ${alpha * 0.15})`);
+      grad.addColorStop(1, 'rgba(203, 213, 225, 0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  if (particles.length > 300) {
+    particles.splice(0, particles.length - 300);
+  }
+}
+
+function drawStars(ctx: CanvasRenderingContext2D, tick: number, width: number, height: number) {
+  const starCount = 50;
+  for (let i = 0; i < starCount; i++) {
+    const x = (i * 73 + 17) % width;
+    const y = (i * 47 + 31) % (height * 0.6);
+    const twinkle = 0.5 + Math.sin(tick * 0.03 + i) * 0.5;
+    const size = 0.8 + ((i * 13) % 10) / 10;
+    
+    ctx.fillStyle = `rgba(255, 255, 255, ${twinkle * 0.8})`;
+    ctx.beginPath();
+    ctx.arc(x, y, size, 0, Math.PI * 2);
+    ctx.fill();
+    
+    if (i % 7 === 0) {
+      ctx.fillStyle = `rgba(251, 191, 36, ${twinkle * 0.6})`;
+      ctx.beginPath();
+      ctx.arc(x + 2, y + 1, size * 0.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  const moonX = width * 0.85;
+  const moonY = height * 0.12;
+  const moonGlow = ctx.createRadialGradient(moonX, moonY, 0, moonX, moonY, 50);
+  moonGlow.addColorStop(0, 'rgba(255, 255, 255, 0.3)');
+  moonGlow.addColorStop(0.5, 'rgba(255, 255, 255, 0.1)');
+  moonGlow.addColorStop(1, 'rgba(255, 255, 255, 0)');
+  ctx.fillStyle = moonGlow;
+  ctx.beginPath();
+  ctx.arc(moonX, moonY, 50, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#fef3c7';
+  ctx.beginPath();
+  ctx.arc(moonX, moonY, 12, 0, Math.PI * 2);
+  ctx.fill();
+  
+  ctx.fillStyle = '#050a08';
+  ctx.beginPath();
+  ctx.arc(moonX + 4, moonY - 2, 9, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function drawTimeWeatherIndicator(
+  ctx: CanvasRenderingContext2D,
+  timeOfDay: TimeOfDay,
+  weather: WeatherType,
+  dayProgress: number,
+  dayCount: number,
+  tick: number,
+  width: number
+) {
+  const timeInfo = TIME_OF_DAY_LABELS[timeOfDay];
+  const weatherInfo = WEATHER_LABELS[weather];
+  
+  const barWidth = 180;
+  const barHeight = 6;
+  const barX = width - barWidth - 15;
+  const barY = 18;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+  ctx.fillRect(barX - 8, barY - 18, barWidth + 16, 60);
+  
+  ctx.strokeStyle = timeInfo.color + '60';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barX - 8, barY - 18, barWidth + 16, 60);
+
+  ctx.font = 'bold 11px monospace';
+  ctx.fillStyle = timeInfo.color;
+  ctx.textAlign = 'left';
+  ctx.fillText(`${timeInfo.icon} 第${dayCount}天 · ${timeInfo.label}`, barX - 4, barY - 4);
+
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+  ctx.fillRect(barX, barY, barWidth, barHeight);
+
+  const timeGrad = ctx.createLinearGradient(barX, 0, barX + barWidth, 0);
+  timeGrad.addColorStop(0, '#fb923c');
+  timeGrad.addColorStop(0.125, '#fb923c');
+  timeGrad.addColorStop(0.5, '#fbbf24');
+  timeGrad.addColorStop(0.625, '#fbbf24');
+  timeGrad.addColorStop(0.75, '#f472b6');
+  timeGrad.addColorStop(1, '#818cf8');
+  ctx.fillStyle = timeGrad;
+  ctx.fillRect(barX, barY, barWidth * dayProgress, barHeight);
+
+  const sunX = barX + barWidth * dayProgress;
+  ctx.fillStyle = timeInfo.color;
+  ctx.shadowColor = timeInfo.color;
+  ctx.shadowBlur = 8;
+  ctx.beginPath();
+  ctx.arc(sunX, barY + barHeight / 2, 5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.font = '11px monospace';
+  ctx.fillStyle = weatherInfo.color;
+  ctx.fillText(`${weatherInfo.icon} ${weatherInfo.label}`, barX - 4, barY + barHeight + 16);
+  
+  const hours = Math.floor(dayProgress * 24);
+  const minutes = Math.floor((dayProgress * 24 - hours) * 60);
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+  ctx.textAlign = 'right';
+  ctx.font = '10px monospace';
+  ctx.fillText(`${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`, barX + barWidth + 4, barY + 3);
+  
+  ctx.textAlign = 'left';
 }

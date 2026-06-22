@@ -1,5 +1,35 @@
 export type TerrainType = 'plain' | 'forest' | 'rock' | 'water' | 'nest' | 'resource';
 
+export type TimeOfDay = 'dawn' | 'day' | 'dusk' | 'night';
+export type WeatherType = 'sunny' | 'cloudy' | 'rain' | 'fog' | 'storm';
+
+export interface DayNightEffect {
+  bugSpeedMul: number;
+  bugAttackMul: number;
+  bugDefenseMul: number;
+  bugVisionMul: number;
+  bugRegenMul: number;
+}
+
+export interface WeatherEffect {
+  enemySpeedMul: number;
+  enemyAttackMul: number;
+  enemyVisionMul: number;
+  enemyDefenseMul: number;
+  pheromoneDecayMul: number;
+}
+
+export interface TimeCycleState {
+  dayProgress: number;
+  timeOfDay: TimeOfDay;
+  currentWeather: WeatherType;
+  weatherDuration: number;
+  weatherTimer: number;
+  dayCount: number;
+  dayNightEffect: DayNightEffect;
+  weatherEffect: WeatherEffect;
+}
+
 export type InstructionType = 'MOVE' | 'ATTACK' | 'COLLECT' | 'REPRODUCE' | 'SPREAD' | 'RETREAT';
 
 export interface Instruction {
@@ -181,6 +211,7 @@ export interface GameState {
   currentSquadId: string;
   evolution: SwarmEvolution;
   pendingMutations: Array<{ bugId: number; mutation: Mutation; tick: number }>;
+  timeCycle: TimeCycleState;
 }
 
 export interface InstructionPreset {
@@ -573,4 +604,118 @@ export function getExpReward(action: 'collect' | 'kill' | 'deposit_food' | 'depo
     case 'survive': return 1;
     case 'heal': return 4;
   }
+}
+
+export const DAY_NIGHT_EFFECTS: Record<TimeOfDay, DayNightEffect> = {
+  dawn: {
+    bugSpeedMul: 1.1,
+    bugAttackMul: 1.05,
+    bugDefenseMul: 1.0,
+    bugVisionMul: 1.1,
+    bugRegenMul: 1.2,
+  },
+  day: {
+    bugSpeedMul: 1.2,
+    bugAttackMul: 1.15,
+    bugDefenseMul: 0.95,
+    bugVisionMul: 1.3,
+    bugRegenMul: 1.0,
+  },
+  dusk: {
+    bugSpeedMul: 1.05,
+    bugAttackMul: 1.0,
+    bugDefenseMul: 1.05,
+    bugVisionMul: 1.0,
+    bugRegenMul: 1.1,
+  },
+  night: {
+    bugSpeedMul: 0.85,
+    bugAttackMul: 0.85,
+    bugDefenseMul: 1.25,
+    bugVisionMul: 0.6,
+    bugRegenMul: 1.35,
+  },
+};
+
+export const WEATHER_EFFECTS: Record<WeatherType, WeatherEffect> = {
+  sunny: {
+    enemySpeedMul: 1.0,
+    enemyAttackMul: 1.0,
+    enemyVisionMul: 1.1,
+    enemyDefenseMul: 1.0,
+    pheromoneDecayMul: 1.0,
+  },
+  cloudy: {
+    enemySpeedMul: 0.95,
+    enemyAttackMul: 1.0,
+    enemyVisionMul: 0.9,
+    enemyDefenseMul: 1.05,
+    pheromoneDecayMul: 1.0,
+  },
+  rain: {
+    enemySpeedMul: 0.75,
+    enemyAttackMul: 0.85,
+    enemyVisionMul: 0.6,
+    enemyDefenseMul: 1.1,
+    pheromoneDecayMul: 1.5,
+  },
+  fog: {
+    enemySpeedMul: 0.85,
+    enemyAttackMul: 0.9,
+    enemyVisionMul: 0.4,
+    enemyDefenseMul: 1.15,
+    pheromoneDecayMul: 0.8,
+  },
+  storm: {
+    enemySpeedMul: 0.65,
+    enemyAttackMul: 1.3,
+    enemyVisionMul: 0.5,
+    enemyDefenseMul: 0.85,
+    pheromoneDecayMul: 2.0,
+  },
+};
+
+export const WEATHER_WEIGHTS: Record<WeatherType, number> = {
+  sunny: 40,
+  cloudy: 30,
+  rain: 15,
+  fog: 10,
+  storm: 5,
+};
+
+export const TIME_OF_DAY_LABELS: Record<TimeOfDay, { label: string; icon: string; color: string }> = {
+  dawn: { label: '黎明', icon: '🌅', color: '#fb923c' },
+  day: { label: '白昼', icon: '☀️', color: '#fbbf24' },
+  dusk: { label: '黄昏', icon: '🌇', color: '#f472b6' },
+  night: { label: '夜晚', icon: '🌙', color: '#818cf8' },
+};
+
+export const WEATHER_LABELS: Record<WeatherType, { label: string; icon: string; color: string }> = {
+  sunny: { label: '晴朗', icon: '☀️', color: '#fbbf24' },
+  cloudy: { label: '多云', icon: '☁️', color: '#94a3b8' },
+  rain: { label: '降雨', icon: '🌧️', color: '#38bdf8' },
+  fog: { label: '迷雾', icon: '🌫️', color: '#cbd5e1' },
+  storm: { label: '风暴', icon: '⛈️', color: '#a78bfa' },
+};
+
+export const TICKS_PER_DAY = 2400;
+export const WEATHER_CHANGE_INTERVAL = 600;
+
+export function getTimeOfDay(progress: number): TimeOfDay {
+  if (progress < 0.125) return 'dawn';
+  if (progress < 0.625) return 'day';
+  if (progress < 0.75) return 'dusk';
+  return 'night';
+}
+
+export function selectRandomWeather(): WeatherType {
+  const types = Object.keys(WEATHER_WEIGHTS) as WeatherType[];
+  const totalWeight = types.reduce((sum, t) => sum + WEATHER_WEIGHTS[t], 0);
+  let roll = Math.random() * totalWeight;
+  
+  for (const t of types) {
+    roll -= WEATHER_WEIGHTS[t];
+    if (roll <= 0) return t;
+  }
+  return 'sunny';
 }

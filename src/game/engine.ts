@@ -14,12 +14,21 @@ import type {
   Mutation,
   MutationType,
   SwarmEvolution,
+  TimeCycleState,
+  TimeOfDay,
+  WeatherType,
 } from './types';
 import {
   MUTATION_LIBRARY,
   RARITY_WEIGHTS,
   calcExpToNext,
   getExpReward,
+  DAY_NIGHT_EFFECTS,
+  WEATHER_EFFECTS,
+  TICKS_PER_DAY,
+  WEATHER_CHANGE_INTERVAL,
+  getTimeOfDay,
+  selectRandomWeather,
 } from './types';
 
 const GRID_W = 60;
@@ -76,12 +85,12 @@ function depositPheromone(
   }
 }
 
-function decayPheromones(map: PheromoneMap) {
+function decayPheromones(map: PheromoneMap, decayMul: number = 1.0) {
   for (let y = 0; y < map.height; y++) {
     for (let x = 0; x < map.width; x++) {
       const cell = map.cells[y][x];
       if (cell.strength > 0) {
-        cell.strength = Math.max(0, cell.strength - map.decayRate);
+        cell.strength = Math.max(0, cell.strength - map.decayRate * decayMul);
         cell.age++;
       }
     }
@@ -406,6 +415,9 @@ export function simulateStep(
   const pid = { v: (state.particles[state.particles.length - 1]?.id ?? 0) + 1 };
   const newPheromoneMap = clonePheromoneMap(state.pheromoneMap);
   const mutationsMap = createMutationsMap();
+  
+  const newTimeCycle = updateTimeCycle(state.timeCycle);
+  const { dayNightEffect, weatherEffect } = newTimeCycle;
 
   const deltaFood = { v: 0 };
   const deltaCrystal = { v: 0 };
@@ -468,13 +480,17 @@ export function simulateStep(
     const speedBoost = 1 + getBugAbilityValue(bug, mutationsMap, 'speed_boost');
     const hpRegenVal = getBugAbilityValue(bug, mutationsMap, 'hp_regen');
     if (hpRegenVal > 0 && bug.hp < bug.maxHp) {
-      bug.hp = Math.min(bug.maxHp, bug.hp + hpRegenVal);
+      bug.hp = Math.min(bug.maxHp, bug.hp + hpRegenVal * dayNightEffect.bugRegenMul);
+    }
+    
+    if (dayNightEffect.bugRegenMul > 1 && bug.hp < bug.maxHp) {
+      bug.hp = Math.min(bug.maxHp, bug.hp + 0.02 * (dayNightEffect.bugRegenMul - 1) * 10);
     }
     if (bug.age % 180 === 0) {
       addBugExp(bug.id, getExpReward('survive'), 'survive');
     }
     const baseSpeed = bug.role === 'scout' ? 1.4 : bug.role === 'soldier' ? 0.85 : 1.05;
-    const speed = 1.2 * baseSpeed * speedMul * speedBoost;
+    const speed = 1.2 * baseSpeed * speedMul * speedBoost * dayNightEffect.bugSpeedMul;
 
     const squad = squadMap.get(bug.squadId);
     const squadInstructions = squad?.instructions ?? [];
@@ -610,7 +626,7 @@ export function simulateStep(
               if (nearestD < atkRange * atkRangeMul && bug.cooldown <= 0) {
                 const atkMul = terrainAttackMul(terrainAt);
                 let dmg = bug.attackPower * atkMul * (bug.role === 'soldier' ? 1.3 : 1);
-                dmg *= damageBoost * swarmMul;
+                dmg *= damageBoost * swarmMul * dayNightEffect.bugAttackMul;
                 if (poisonVal > 0) dmg *= 1 + poisonVal;
                 nearestEnemy.hp -= dmg;
                 bug.cooldown = 18;
@@ -753,10 +769,11 @@ export function simulateStep(
     if (enemy.hp <= 0) continue;
     let nearestBug: Bug | null = null;
     let nearestD = Infinity;
+    const effectiveRange = enemy.range * weatherEffect.enemyVisionMul;
     for (const b of newBugs) {
       if (b.hp <= 0) continue;
       const d = dist(enemy.pos, b.pos);
-      if (d < enemy.range && d < nearestD) {
+      if (d < effectiveRange && d < nearestD) {
         nearestD = d;
         nearestBug = b;
       }
@@ -765,18 +782,19 @@ export function simulateStep(
       const dx = nearestBug.pos.x - enemy.pos.x;
       const dy = nearestBug.pos.y - enemy.pos.y;
       const [nx, ny] = normalize(dx, dy);
-      const espeed = enemy.type === 'predator' ? 0.9 : 0.55;
+      const espeed = (enemy.type === 'predator' ? 0.9 : 0.55) * weatherEffect.enemySpeedMul;
       enemy.vel.vx += nx * 0.15 * espeed;
       enemy.vel.vy += ny * 0.15 * espeed;
       if (nearestD < 18 && enemy.type === 'predator') {
-        nearestBug.hp -= enemy.attackPower * 0.08;
+        const damage = enemy.attackPower * 0.08 * weatherEffect.enemyAttackMul / dayNightEffect.bugDefenseMul;
+        nearestBug.hp -= damage;
         addParticle(newParticles, pid, nearestBug.pos, '#fca5a5', 2, 1);
       }
     } else {
-      enemy.vel.vx += rand(-0.03, 0.03);
-      enemy.vel.vy += rand(-0.03, 0.03);
+      enemy.vel.vx += rand(-0.03, 0.03) * weatherEffect.enemySpeedMul;
+      enemy.vel.vy += rand(-0.03, 0.03) * weatherEffect.enemySpeedMul;
     }
-    const vmax = 0.9;
+    const vmax = 0.9 * weatherEffect.enemySpeedMul;
     const vs = Math.sqrt(enemy.vel.vx * enemy.vel.vx + enemy.vel.vy * enemy.vel.vy);
     if (vs > vmax) {
       enemy.vel.vx = (enemy.vel.vx / vs) * vmax;
@@ -853,7 +871,7 @@ export function simulateStep(
   }
   const aliveParticles = newParticles.filter(p => p.life > 0);
 
-  decayPheromones(newPheromoneMap);
+  decayPheromones(newPheromoneMap, weatherEffect.pheromoneDecayMul);
 
   const newEvolution = { ...evolution };
   newEvolution.totalExp += deltaExpTotal.v;
@@ -897,6 +915,7 @@ export function simulateStep(
     resourcesCollected: state.resourcesCollected + deltaCollected.v,
     evolution: newEvolution,
     pendingMutations: activePendingMutations,
+    timeCycle: newTimeCycle,
   };
 }
 
@@ -1016,10 +1035,52 @@ export function createInitialState(level: number): GameState {
     currentSquadId: 'squad-default',
     evolution: createSwarmEvolution(),
     pendingMutations: [],
+    timeCycle: createInitialTimeCycle(),
   };
 }
 
 export const GRID_CONSTANTS = { GRID_W, GRID_H, CELL };
+
+export function createInitialTimeCycle(): TimeCycleState {
+  const initialWeather = selectRandomWeather();
+  const initialTimeOfDay: TimeOfDay = 'day';
+  return {
+    dayProgress: 0.25,
+    timeOfDay: initialTimeOfDay,
+    currentWeather: initialWeather,
+    weatherDuration: WEATHER_CHANGE_INTERVAL,
+    weatherTimer: 0,
+    dayCount: 1,
+    dayNightEffect: { ...DAY_NIGHT_EFFECTS[initialTimeOfDay] },
+    weatherEffect: { ...WEATHER_EFFECTS[initialWeather] },
+  };
+}
+
+export function updateTimeCycle(timeCycle: TimeCycleState): TimeCycleState {
+  const newCycle = { ...timeCycle };
+  
+  newCycle.dayProgress = (newCycle.dayProgress + 1 / TICKS_PER_DAY) % 1;
+  
+  if (newCycle.dayProgress < timeCycle.dayProgress) {
+    newCycle.dayCount++;
+  }
+  
+  const newTimeOfDay = getTimeOfDay(newCycle.dayProgress);
+  if (newTimeOfDay !== newCycle.timeOfDay) {
+    newCycle.timeOfDay = newTimeOfDay;
+    newCycle.dayNightEffect = { ...DAY_NIGHT_EFFECTS[newTimeOfDay] };
+  }
+  
+  newCycle.weatherTimer++;
+  if (newCycle.weatherTimer >= newCycle.weatherDuration) {
+    newCycle.weatherTimer = 0;
+    newCycle.currentWeather = selectRandomWeather();
+    newCycle.weatherDuration = WEATHER_CHANGE_INTERVAL + Math.floor(Math.random() * WEATHER_CHANGE_INTERVAL);
+    newCycle.weatherEffect = { ...WEATHER_EFFECTS[newCycle.currentWeather] };
+  }
+  
+  return newCycle;
+}
 
 export function updateLevelProgress(state: GameState): GameState {
   const levels = [
