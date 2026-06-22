@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { GameStore, Instruction, InstructionType, InstructionPreset } from '../game/types';
+import type { GameStore, Instruction, InstructionType, InstructionPreset, Squad } from '../game/types';
 import type { Bug, Enemy, PheromoneMap } from '../game/types';
 import {
   createInitialState,
@@ -7,6 +7,7 @@ import {
   tryReproduce,
   createBug,
   updateLevelProgress,
+  DEFAULT_SQUAD_COLORS,
 } from '../game/engine';
 import { INSTRUCTION_META } from '../game/types';
 import { createEventRecorder } from '../game/eventRecorder';
@@ -69,8 +70,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
   setState: (partial) => set((s) => ({ state: { ...s.state, ...partial } })),
 
-  setInstructions: (instructions) => set({ instructions }),
-
   togglePheromoneLayer: () => set((s) => ({ showPheromoneLayer: !s.showPheromoneLayer })),
 
   setShowPheromoneLayer: (show) => set({ showPheromoneLayer: show }),
@@ -87,48 +86,27 @@ export const useGameStore = create<GameStore>((set, get) => ({
   },
 
   addInstruction: (type, index) => {
-    const { instructions, state } = get();
-    const meta = INSTRUCTION_META[type];
-    const newInst: Instruction = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      type,
-      duration: meta.durationDefault,
-      ...(meta.hasParam ? { param: meta.paramDefault } : {}),
-    };
-    const newList = [...instructions];
-    if (index !== undefined) {
-      newList.splice(index, 0, newInst);
-    } else {
-      newList.push(newInst);
-    }
-    let newTimer = state.instructionTimer;
-    if (newList.length > 0 && newTimer <= 0) {
-      newTimer = newList[0].duration;
-    }
-    set({ instructions: newList, state: { ...state, instructionTimer: newTimer } });
+    const { state } = get();
+    const squadId = state.currentSquadId;
+    get().addSquadInstruction(squadId, type, index);
   },
 
   removeInstruction: (id) => {
-    const { instructions, state } = get();
-    const targetIndex = instructions.findIndex((i) => i.id === id);
-    const newList = instructions.filter((i) => i.id !== id);
-    let newTimer = state.instructionTimer;
-    if (targetIndex === 0) {
-      newTimer = newList.length > 0 ? newList[0].duration : 0;
-    }
-    set({ instructions: newList, state: { ...state, instructionTimer: newTimer } });
+    const { state } = get();
+    const squadId = state.currentSquadId;
+    get().removeSquadInstruction(squadId, id);
   },
 
   moveInstruction: (from, to) => {
-    const { instructions, state } = get();
-    const newList = [...instructions];
-    const [item] = newList.splice(from, 1);
-    newList.splice(to, 0, item);
-    let newTimer = state.instructionTimer;
-    if (from === 0 || to === 0) {
-      newTimer = newList.length > 0 ? newList[0].duration : 0;
-    }
-    set({ instructions: newList, state: { ...state, instructionTimer: newTimer } });
+    const { state } = get();
+    const squadId = state.currentSquadId;
+    get().moveSquadInstruction(squadId, from, to);
+  },
+
+  setInstructions: (instructions) => {
+    const { state } = get();
+    const squadId = state.currentSquadId;
+    get().setSquadInstructions(squadId, instructions);
   },
 
   setPaused: (paused) => set((s) => ({ state: { ...s.state, paused } })),
@@ -136,42 +114,58 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setSpeed: (speed) => set((s) => ({ state: { ...s.state, speed } })),
 
   step: () => {
-    const { state, instructions, eventRecorder } = get();
+    const { state, eventRecorder } = get();
     if (state.paused) return;
     if (eventRecorder.history.isRewinding) return;
 
     let newState = { ...state };
-    const workingInstructions = [...instructions];
-    let instructionSwitched = false;
+    const newSquads = newState.squads.map(s => ({ ...s, instructions: [...s.instructions] }));
+    let anySwitched = false;
 
-    if (workingInstructions.length > 0) {
-      if (newState.instructionTimer <= 0) {
-        newState.instructionTimer = workingInstructions[0].duration;
-      }
-      newState.instructionTimer--;
-      if (newState.instructionTimer <= 0) {
-        workingInstructions.shift();
-        instructionSwitched = true;
+    for (const squad of newSquads) {
+      const squadInst = squad.instructions;
+      if (squadInst.length > 0) {
+        if (squad.instructionTimer <= 0) {
+          squad.instructionTimer = squadInst[0].duration;
+        }
+        squad.instructionTimer--;
+        if (squad.instructionTimer <= 0) {
+          squadInst.shift();
+          anySwitched = true;
+          if (squadInst.length > 0) {
+            eventRecorder.recordEvent('instruction_switch', {
+              squadId: squad.id,
+              squadName: squad.name,
+              nextType: squadInst[0].type,
+              remaining: squadInst.length,
+            });
+          }
+        }
       }
     }
 
-    if (instructionSwitched && workingInstructions.length > 0) {
-      eventRecorder.recordEvent('instruction_switch', {
-        nextType: workingInstructions[0].type,
-        remaining: workingInstructions.length,
-      });
-    }
+    newState.squads = newSquads;
 
-    const reproduceCost = workingInstructions
-      .filter((i) => i.type === 'REPRODUCE')
-      .reduce((sum, i) => sum + (i.param ?? 15), 0);
-    const reproduceCount = workingInstructions.filter((i) => i.type === 'REPRODUCE').length;
-    const avgCost = reproduceCount > 0 ? Math.floor(reproduceCost / reproduceCount) : 15;
+    const currentSquad = newSquads.find(s => s.id === newState.currentSquadId);
+    const currentInstructions = currentSquad?.instructions ?? [];
+
+    let totalReproduceCost = 0;
+    let totalReproduceCount = 0;
+    for (const squad of newSquads) {
+      const rCost = squad.instructions
+        .filter((i) => i.type === 'REPRODUCE')
+        .reduce((sum, i) => sum + (i.param ?? 15), 0);
+      const rCount = squad.instructions.filter((i) => i.type === 'REPRODUCE').length;
+      totalReproduceCost += rCost;
+      totalReproduceCount += rCount;
+    }
+    const avgCost = totalReproduceCount > 0 ? Math.floor(totalReproduceCost / totalReproduceCount) : 15;
 
     const addBugQueue: Bug[] = [];
 
     newState = simulateStep(newState, {
-      instructions: workingInstructions,
+      instructions: currentInstructions,
+      squads: newSquads,
       onFoodGained: (n, pos) => {
         eventRecorder.recordEvent('food_deposited', {
           amount: n,
@@ -204,6 +198,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
         eventRecorder.recordEvent('bug_death', {
           bugId: bug.id,
           role: bug.role,
+          squadId: bug.squadId,
           age: bug.age,
           pos: { ...bug.pos },
         });
@@ -212,23 +207,27 @@ export const useGameStore = create<GameStore>((set, get) => ({
         eventRecorder.recordEvent('bug_born', {
           bugId: bug.id,
           role: bug.role,
+          squadId: bug.squadId,
           pos: { ...bug.pos },
         });
       },
     });
 
     if (
-      reproduceCount > 0 &&
+      totalReproduceCount > 0 &&
       newState.tick % 90 === 0 &&
       newState.bugs.length < 120
     ) {
+      const reproduceSquad = newSquads.find(s => s.instructions.some(i => i.type === 'REPRODUCE')) ?? newSquads[0];
       newState = tryReproduce(newState, avgCost, (bug) => {
         bug.id = ++bugIdCounter;
+        bug.squadId = reproduceSquad.id;
         addBugQueue.push(bug);
       }, (bug) => {
         eventRecorder.recordEvent('bug_born', {
           bugId: bug.id,
           role: bug.role,
+          squadId: reproduceSquad.id,
           pos: { ...bug.pos },
         });
       });
@@ -239,9 +238,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
 
     newState = updateLevelProgress(newState);
-    set({ state: newState, instructions: workingInstructions });
+    set({ state: newState, instructions: currentInstructions });
 
-    eventRecorder.takeSnapshot(newState, workingInstructions);
+    eventRecorder.takeSnapshot(newState, currentInstructions, newSquads);
   },
 
   resetLevel: () => {
@@ -250,11 +249,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const level = s.state.level;
     const newState = createInitialState(level);
     s.eventRecorder.clear();
-    set({ state: newState, instructions: [] });
+    const currentSquad = newState.squads.find(sq => sq.id === newState.currentSquadId);
+    set({ state: newState, instructions: currentSquad?.instructions ?? [] });
     setTimeout(() => {
       get().spawnInitialSwarm();
       const afterSpawn = get();
-      afterSpawn.eventRecorder.takeSnapshot(afterSpawn.state, afterSpawn.instructions);
+      afterSpawn.eventRecorder.takeSnapshot(afterSpawn.state, afterSpawn.instructions, afterSpawn.state.squads);
     }, 0);
   },
 
@@ -264,22 +264,31 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const nextLv = s.state.level + 1;
     const newState = createInitialState(nextLv);
     s.eventRecorder.clear();
-    set({ state: newState });
+    const currentSquad = newState.squads.find(sq => sq.id === newState.currentSquadId);
+    set({ state: newState, instructions: currentSquad?.instructions ?? [] });
     setTimeout(() => {
       get().spawnInitialSwarm();
       const afterSpawn = get();
-      afterSpawn.eventRecorder.takeSnapshot(afterSpawn.state, afterSpawn.instructions);
+      afterSpawn.eventRecorder.takeSnapshot(afterSpawn.state, afterSpawn.instructions, afterSpawn.state.squads);
     }, 0);
   },
 
   spawnInitialSwarm: () => {
     const s = get();
     const nestPos = s.state.nestPos;
+    const squads = s.state.squads;
+    const defaultSquad = squads.find(sq => sq.id === 'squad-default') ?? squads[0];
+    const alphaSquad = squads.find(sq => sq.id === 'squad-alpha') ?? defaultSquad;
+    const betaSquad = squads.find(sq => sq.id === 'squad-beta') ?? defaultSquad;
     const bugs: Bug[] = [];
     for (let i = 0; i < 12; i++) {
       const role: Bug['role'] = i < 7 ? 'worker' : i < 10 ? 'soldier' : 'scout';
       const id = ++bugIdCounter;
-      bugs.push(createBug(id, nestPos, role));
+      let squadId = defaultSquad.id;
+      if (role === 'worker') squadId = alphaSquad.id;
+      else if (role === 'soldier') squadId = betaSquad.id;
+      else squadId = defaultSquad.id;
+      bugs.push(createBug(id, nestPos, role, squadId));
     }
     set((prev) => ({ state: { ...prev.state, bugs } }));
   },
@@ -307,9 +316,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
     if (!preset) return;
     const loadedInstructions = regenerateInstructionIds(preset.instructions);
     const newTimer = loadedInstructions.length > 0 ? loadedInstructions[0].duration : 0;
+    const newSquads = state.squads.map(sq => {
+      if (sq.id === state.currentSquadId) {
+        return { ...sq, instructions: loadedInstructions, instructionTimer: newTimer };
+      }
+      return sq;
+    });
     set({
       instructions: loadedInstructions,
-      state: { ...state, instructionTimer: newTimer },
+      state: { ...state, squads: newSquads, instructionTimer: newTimer },
     });
   },
 
@@ -477,7 +492,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
     const result = eventRecorder.seekToTick(tick);
     if (result) {
-      set({ state: result.state, instructions: result.instructions });
+      const newState = { ...result.state, squads: result.squads ?? result.state.squads };
+      const currentSquad = newState.squads.find(sq => sq.id === newState.currentSquadId);
+      set({ state: newState, instructions: currentSquad?.instructions ?? result.instructions });
     }
   },
 
@@ -488,7 +505,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     }
     const result = eventRecorder.stepBackward();
     if (result) {
-      set({ state: result.state, instructions: result.instructions });
+      const newState = { ...result.state, squads: result.squads ?? result.state.squads };
+      const currentSquad = newState.squads.find(sq => sq.id === newState.currentSquadId);
+      set({ state: newState, instructions: currentSquad?.instructions ?? result.instructions });
     }
   },
 
@@ -496,7 +515,9 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const { eventRecorder } = get();
     const result = eventRecorder.stepForward();
     if (result) {
-      set({ state: result.state, instructions: result.instructions });
+      const newState = { ...result.state, squads: result.squads ?? result.state.squads };
+      const currentSquad = newState.squads.find(sq => sq.id === newState.currentSquadId);
+      set({ state: newState, instructions: currentSquad?.instructions ?? result.instructions });
     }
   },
 
@@ -509,6 +530,207 @@ export const useGameStore = create<GameStore>((set, get) => ({
       eventRecorder.enterRewindMode();
       setState({ paused: true });
     }
+  },
+
+  createSquad: (name, color) => {
+    const { state } = get();
+    const usedColors = state.squads.map(s => s.color);
+    const availableColor = color ?? DEFAULT_SQUAD_COLORS.find(c => !usedColors.includes(c)) ?? DEFAULT_SQUAD_COLORS[0];
+    const newSquad: Squad = {
+      id: `squad-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      name: name.trim() || `编组 ${state.squads.length + 1}`,
+      color: availableColor,
+      instructions: [],
+      instructionTimer: 0,
+      createdAt: Date.now(),
+    };
+    set(prev => ({
+      state: { ...prev.state, squads: [...prev.state.squads, newSquad] },
+    }));
+  },
+
+  deleteSquad: (squadId) => {
+    const { state } = get();
+    if (state.squads.length <= 1) return;
+    const targetSquad = state.squads.find(s => s.id === squadId);
+    if (!targetSquad) return;
+    const remainingSquads = state.squads.filter(s => s.id !== squadId);
+    const fallbackSquad = remainingSquads[0];
+    const newCurrentSquadId = state.currentSquadId === squadId ? fallbackSquad.id : state.currentSquadId;
+    const newBugs = state.bugs.map(b => b.squadId === squadId ? { ...b, squadId: fallbackSquad.id } : b);
+    set(prev => ({
+      state: {
+        ...prev.state,
+        squads: remainingSquads,
+        currentSquadId: newCurrentSquadId,
+        bugs: newBugs,
+      },
+      instructions: newCurrentSquadId === fallbackSquad.id ? fallbackSquad.instructions : prev.instructions,
+    }));
+  },
+
+  renameSquad: (squadId, name) => {
+    set(prev => ({
+      state: {
+        ...prev.state,
+        squads: prev.state.squads.map(s =>
+          s.id === squadId ? { ...s, name: name.trim() || s.name } : s
+        ),
+      },
+    }));
+  },
+
+  setSquadColor: (squadId, color) => {
+    set(prev => ({
+      state: {
+        ...prev.state,
+        squads: prev.state.squads.map(s =>
+          s.id === squadId ? { ...s, color } : s
+        ),
+      },
+    }));
+  },
+
+  setCurrentSquad: (squadId) => {
+    const { state } = get();
+    const squad = state.squads.find(s => s.id === squadId);
+    if (!squad) return;
+    set(prev => ({
+      state: { ...prev.state, currentSquadId: squadId },
+      instructions: squad.instructions,
+    }));
+  },
+
+  setSquadInstructions: (squadId, instructions) => {
+    set(prev => {
+      const newSquads = prev.state.squads.map(s => {
+        if (s.id !== squadId) return s;
+        const newTimer = instructions.length > 0 ? instructions[0].duration : 0;
+        return { ...s, instructions, instructionTimer: newTimer };
+      });
+      const newState = { ...prev.state, squads: newSquads };
+      if (prev.state.currentSquadId === squadId) {
+        return { state: newState, instructions };
+      }
+      return { state: newState };
+    });
+  },
+
+  addSquadInstruction: (squadId, type, index) => {
+    const { state } = get();
+    const meta = INSTRUCTION_META[type];
+    const newInst: Instruction = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      type,
+      duration: meta.durationDefault,
+      ...(meta.hasParam ? { param: meta.paramDefault } : {}),
+    };
+    const squad = state.squads.find(s => s.id === squadId);
+    if (!squad) return;
+    const newList = [...squad.instructions];
+    if (index !== undefined) {
+      newList.splice(index, 0, newInst);
+    } else {
+      newList.push(newInst);
+    }
+    let newTimer = squad.instructionTimer;
+    if (newList.length > 0 && newTimer <= 0) {
+      newTimer = newList[0].duration;
+    }
+    const newSquads = state.squads.map(s =>
+      s.id === squadId ? { ...s, instructions: newList, instructionTimer: newTimer } : s
+    );
+    const newState = { ...state, squads: newSquads };
+    if (state.currentSquadId === squadId) {
+      set({ state: newState, instructions: newList });
+    } else {
+      set({ state: newState });
+    }
+  },
+
+  removeSquadInstruction: (squadId, instructionId) => {
+    const { state } = get();
+    const squad = state.squads.find(s => s.id === squadId);
+    if (!squad) return;
+    const targetIndex = squad.instructions.findIndex((i) => i.id === instructionId);
+    const newList = squad.instructions.filter((i) => i.id !== instructionId);
+    let newTimer = squad.instructionTimer;
+    if (targetIndex === 0) {
+      newTimer = newList.length > 0 ? newList[0].duration : 0;
+    }
+    const newSquads = state.squads.map(s =>
+      s.id === squadId ? { ...s, instructions: newList, instructionTimer: newTimer } : s
+    );
+    const newState = { ...state, squads: newSquads };
+    if (state.currentSquadId === squadId) {
+      set({ state: newState, instructions: newList });
+    } else {
+      set({ state: newState });
+    }
+  },
+
+  moveSquadInstruction: (squadId, from, to) => {
+    const { state } = get();
+    const squad = state.squads.find(s => s.id === squadId);
+    if (!squad) return;
+    const newList = [...squad.instructions];
+    const [item] = newList.splice(from, 1);
+    newList.splice(to, 0, item);
+    let newTimer = squad.instructionTimer;
+    if (from === 0 || to === 0) {
+      newTimer = newList.length > 0 ? newList[0].duration : 0;
+    }
+    const newSquads = state.squads.map(s =>
+      s.id === squadId ? { ...s, instructions: newList, instructionTimer: newTimer } : s
+    );
+    const newState = { ...state, squads: newSquads };
+    if (state.currentSquadId === squadId) {
+      set({ state: newState, instructions: newList });
+    } else {
+      set({ state: newState });
+    }
+  },
+
+  assignBugToSquad: (bugId, squadId) => {
+    const { state } = get();
+    if (!state.squads.some(s => s.id === squadId)) return;
+    const newBugs = state.bugs.map(b =>
+      b.id === bugId ? { ...b, squadId } : b
+    );
+    set(prev => ({ state: { ...prev.state, bugs: newBugs } }));
+  },
+
+  assignBulkToSquad: (bugIds, squadId) => {
+    const { state } = get();
+    if (!state.squads.some(s => s.id === squadId)) return;
+    const idSet = new Set(bugIds);
+    const newBugs = state.bugs.map(b =>
+      idSet.has(b.id) ? { ...b, squadId } : b
+    );
+    set(prev => ({ state: { ...prev.state, bugs: newBugs } }));
+  },
+
+  assignAllToSquad: (squadId) => {
+    const { state } = get();
+    if (!state.squads.some(s => s.id === squadId)) return;
+    const newBugs = state.bugs.map(b => ({ ...b, squadId }));
+    set(prev => ({ state: { ...prev.state, bugs: newBugs } }));
+  },
+
+  splitSquadByRole: (sourceSquadId) => {
+    const { state } = get();
+    const squadBugs = state.bugs.filter(b => b.squadId === sourceSquadId);
+    if (squadBugs.length === 0) return;
+    const workerSquad = state.squads.find(s => s.id === 'squad-alpha') ?? state.squads[0];
+    const soldierSquad = state.squads.find(s => s.id === 'squad-beta') ?? state.squads[state.squads.length - 1];
+    const defaultSquad = state.squads.find(s => s.id === 'squad-default') ?? state.squads[0];
+    const newBugs = state.bugs.map(b => {
+      if (b.squadId !== sourceSquadId) return b;
+      if (b.role === 'worker') return { ...b, squadId: workerSquad.id };
+      if (b.role === 'soldier') return { ...b, squadId: soldierSquad.id };
+      return { ...b, squadId: defaultSquad.id };
+    });
+    set(prev => ({ state: { ...prev.state, bugs: newBugs } }));
   },
 }));
 

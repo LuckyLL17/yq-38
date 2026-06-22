@@ -6,6 +6,7 @@ import type {
   EventHistory,
   EventRecorderAPI,
   EventType,
+  Squad,
 } from './types';
 import { simulateStep, updateLevelProgress } from './engine';
 
@@ -23,6 +24,13 @@ export function createEventRecorder(): EventRecorderAPI {
     isRewinding: false,
     rewindTick: null,
   };
+
+  function deepCloneSquads(squads: Squad[]): Squad[] {
+    return squads.map((s) => ({
+      ...s,
+      instructions: s.instructions.map((i) => ({ ...i })),
+    }));
+  }
 
   function deepCloneState(state: GameState): GameState {
     return {
@@ -49,6 +57,7 @@ export function createEventRecorder(): EventRecorderAPI {
         vel: { ...p.vel },
       })),
       nestPos: { ...state.nestPos },
+      squads: deepCloneSquads(state.squads),
     };
   }
 
@@ -75,13 +84,14 @@ export function createEventRecorder(): EventRecorderAPI {
     }
   }
 
-  function takeSnapshot(state: GameState, instructions: Instruction[]) {
+  function takeSnapshot(state: GameState, instructions: Instruction[], squads: Squad[]) {
     if (history.isRewinding) return;
 
     const snapshot: StateSnapshot = {
       tick: state.tick,
       state: deepCloneState(state),
       instructions: deepCloneInstructions(instructions),
+      squads: deepCloneSquads(squads),
     };
 
     const lastSnapshot = history.snapshots[history.snapshots.length - 1];
@@ -117,7 +127,7 @@ export function createEventRecorder(): EventRecorderAPI {
     return result;
   }
 
-  function seekToTick(targetTick: number): { state: GameState; instructions: Instruction[] } | null {
+  function seekToTick(targetTick: number): { state: GameState; instructions: Instruction[]; squads: Squad[] } | null {
     if (history.snapshots.length === 0) return null;
 
     const latestTick = history.currentTick;
@@ -128,23 +138,30 @@ export function createEventRecorder(): EventRecorderAPI {
 
     let curState = deepCloneState(snapshot.state);
     let curInstructions = deepCloneInstructions(snapshot.instructions);
+    let curSquads = deepCloneSquads(snapshot.squads ?? curState.squads);
 
     while (curState.tick < safeTarget) {
-      let instructionTimer = curState.instructionTimer;
-
-      if (curInstructions.length > 0) {
-        if (instructionTimer <= 0) {
-          instructionTimer = curInstructions[0].duration;
-        }
-        instructionTimer--;
-        if (instructionTimer <= 0) {
-          curInstructions = curInstructions.slice(1);
+      const tickSquads = curSquads.map(s => ({ ...s, instructions: [...s.instructions] }));
+      for (const squad of tickSquads) {
+        if (squad.instructions.length > 0) {
+          if (squad.instructionTimer <= 0) {
+            squad.instructionTimer = squad.instructions[0].duration;
+          }
+          squad.instructionTimer--;
+          if (squad.instructionTimer <= 0) {
+            squad.instructions.shift();
+          }
         }
       }
+      curSquads = tickSquads;
+      curState.squads = tickSquads;
 
-      curState.instructionTimer = instructionTimer;
+      const currentSquad = tickSquads.find(s => s.id === curState.currentSquadId);
+      curInstructions = currentSquad?.instructions ?? curInstructions;
+
       curState = simulateStep(curState, {
         instructions: curInstructions,
+        squads: curSquads,
         onFoodGained: () => {},
         onCrystalGained: () => {},
         onEnemyKilled: () => {},
@@ -156,16 +173,16 @@ export function createEventRecorder(): EventRecorderAPI {
     }
 
     history.rewindTick = safeTarget;
-    return { state: curState, instructions: curInstructions };
+    return { state: curState, instructions: curInstructions, squads: curSquads };
   }
 
-  function stepBackward(): { state: GameState; instructions: Instruction[] } | null {
+  function stepBackward(): { state: GameState; instructions: Instruction[]; squads: Squad[] } | null {
     const baseTick = history.rewindTick ?? history.currentTick;
     const stepSize = Math.max(1, Math.floor(baseTick * 0.02));
     return seekToTick(baseTick - stepSize);
   }
 
-  function stepForward(): { state: GameState; instructions: Instruction[] } | null {
+  function stepForward(): { state: GameState; instructions: Instruction[]; squads: Squad[] } | null {
     const baseTick = history.rewindTick ?? history.currentTick;
     const stepSize = Math.max(1, Math.floor(history.currentTick * 0.02));
     return seekToTick(Math.min(baseTick + stepSize, history.currentTick));

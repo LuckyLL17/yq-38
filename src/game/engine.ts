@@ -10,6 +10,7 @@ import type {
   TerrainType,
   PheromoneMap,
   PheromoneCell,
+  Squad,
 } from './types';
 
 const GRID_W = 60;
@@ -191,7 +192,8 @@ export function createEnemies(level: number, terrain: TerrainCell[][]): Enemy[] 
 export function createBug(
   id: number,
   nestPos: Position,
-  role: Bug['role'] = 'worker'
+  role: Bug['role'] = 'worker',
+  squadId: string = 'default'
 ): Bug {
   const angle = rand(0, Math.PI * 2);
   const r = rand(10, 40);
@@ -211,6 +213,7 @@ export function createBug(
     carryCapacity: stats.carry,
     carrying: 0,
     role,
+    squadId,
     instructionPointer: 0,
     cooldown: 0,
     wanderAngle: angle,
@@ -272,6 +275,7 @@ function addParticle(
 
 export interface SimulationContext {
   instructions: Instruction[];
+  squads: Squad[];
   onFoodGained?: (n: number, pos: Position) => void;
   onCrystalGained?: (n: number, pos: Position) => void;
   onEnemyKilled?: (enemy: Enemy) => void;
@@ -286,7 +290,7 @@ export function simulateStep(
 ): GameState {
   if (state.paused) return state;
 
-  const { terrain, nestPos } = state;
+  const { terrain, nestPos, squads } = state;
   const newParticles = [...state.particles];
   const pid = { v: (state.particles[state.particles.length - 1]?.id ?? 0) + 1 };
   const newPheromoneMap = clonePheromoneMap(state.pheromoneMap);
@@ -297,6 +301,7 @@ export function simulateStep(
   const deltaCollected = { v: 0 };
   const ctxWrap: SimulationContext = {
     instructions: ctx.instructions,
+    squads: ctx.squads,
     onFoodGained: (n, pos) => { deltaFood.v += n; ctx.onFoodGained?.(n, pos); },
     onCrystalGained: (n, pos) => { deltaCrystal.v += n; ctx.onCrystalGained?.(n, pos); },
     onEnemyKilled: (enemy) => { deltaKills.v += 1; ctx.onEnemyKilled?.(enemy); },
@@ -309,7 +314,7 @@ export function simulateStep(
   const newEnemies = state.enemies.map(e => ({ ...e, vel: { ...e.vel }, pos: { ...e.pos } }));
   const newResources = state.resources.map(r => ({ ...r, pos: { ...r.pos } }));
 
-  const instructions = ctxWrap.instructions;
+  const squadMap = new Map(squads.map(s => [s.id, s]));
 
   for (const bug of newBugs) {
     bug.age++;
@@ -319,7 +324,9 @@ export function simulateStep(
     const baseSpeed = bug.role === 'scout' ? 1.4 : bug.role === 'soldier' ? 0.85 : 1.05;
     const speed = 1.2 * baseSpeed * speedMul;
 
-    const cur = instructions[0];
+    const squad = squadMap.get(bug.squadId);
+    const squadInstructions = squad?.instructions ?? [];
+    const cur = squadInstructions[0];
 
     if (!cur) {
       bug.wanderAngle += rand(-0.1, 0.1);
@@ -492,37 +499,60 @@ export function simulateStep(
     }
 
     let cohX = 0, cohY = 0, aliX = 0, aliY = 0, sepX = 0, sepY = 0, nc = 0, na = 0, ns = 0;
+    let crossCohX = 0, crossCohY = 0, crossAliX = 0, crossAliY = 0, cnc = 0, cna = 0;
+    const sameSquad = bug.squadId;
     for (const other of newBugs) {
       if (other.id === bug.id) continue;
       const d = dist(bug.pos, other.pos);
-      if (d < 120) {
-        cohX += other.pos.x;
-        cohY += other.pos.y;
-        nc++;
-        if (d < 60) {
-          aliX += other.vel.vx;
-          aliY += other.vel.vy;
-          na++;
+      const isSameSquad = other.squadId === sameSquad;
+      const cohRange = isSameSquad ? 150 : 80;
+      const aliRange = isSameSquad ? 80 : 40;
+      const sepRange = isSameSquad ? 22 : 28;
+      if (d < cohRange) {
+        if (isSameSquad) {
+          cohX += other.pos.x * 1.6;
+          cohY += other.pos.y * 1.6;
+          nc += 1.6;
+        } else {
+          crossCohX += other.pos.x * 0.4;
+          crossCohY += other.pos.y * 0.4;
+          cnc += 0.4;
         }
-        if (d < 22 && d > 0.1) {
-          const f = (22 - d) / 22;
-          sepX += ((bug.pos.x - other.pos.x) / d) * f;
-          sepY += ((bug.pos.y - other.pos.y) / d) * f;
+        if (d < aliRange) {
+          if (isSameSquad) {
+            aliX += other.vel.vx * 1.8;
+            aliY += other.vel.vy * 1.8;
+            na += 1.8;
+          } else {
+            crossAliX += other.vel.vx * 0.3;
+            crossAliY += other.vel.vy * 0.3;
+            cna += 0.3;
+          }
+        }
+        if (d < sepRange && d > 0.1) {
+          const f = (sepRange - d) / sepRange;
+          const mul = isSameSquad ? 0.8 : 1.4;
+          sepX += ((bug.pos.x - other.pos.x) / d) * f * mul;
+          sepY += ((bug.pos.y - other.pos.y) / d) * f * mul;
           ns++;
         }
       }
     }
-    if (nc > 0) {
-      cohX = cohX / nc - bug.pos.x;
-      cohY = cohY / nc - bug.pos.y;
-      const [cx, cy] = normalize(cohX, cohY);
-      bug.vel.vx += cx * 0.03;
-      bug.vel.vy += cy * 0.03;
+    const totalNc = nc + cnc;
+    if (totalNc > 0) {
+      const avgCohX = (cohX + crossCohX) / totalNc - bug.pos.x;
+      const avgCohY = (cohY + crossCohY) / totalNc - bug.pos.y;
+      const [cx, cy] = normalize(avgCohX, avgCohY);
+      const cohMul = nc > 0 ? 0.05 : 0.02;
+      bug.vel.vx += cx * cohMul;
+      bug.vel.vy += cy * cohMul;
     }
-    if (na > 0) {
-      const [ax, ay] = normalize(aliX / na, aliY / na);
-      bug.vel.vx += ax * 0.04;
-      bug.vel.vy += ay * 0.04;
+    const totalNa = na + cna;
+    if (totalNa > 0) {
+      const [ax, ay] = normalize((aliX + crossAliX) / totalNa, (aliY + crossAliY) / totalNa);
+      const aliMul = na > 0 ? 0.06 : 0.02;
+      bug.vel.vx += ax * aliMul;
+      bug.vel.vy += ay * aliMul;
     }
     if (ns > 0) {
       bug.vel.vx += sepX * 0.5;
@@ -650,6 +680,47 @@ export function tryReproduce(
   return state;
 }
 
+export const DEFAULT_SQUAD_COLORS = [
+  '#34d399',
+  '#f472b6',
+  '#fbbf24',
+  '#22d3ee',
+  '#a78bfa',
+  '#fb923c',
+  '#4ade80',
+  '#f87171',
+];
+
+export function createDefaultSquads(): Squad[] {
+  const now = Date.now();
+  return [
+    {
+      id: 'squad-default',
+      name: '主群',
+      color: DEFAULT_SQUAD_COLORS[0],
+      instructions: [],
+      instructionTimer: 0,
+      createdAt: now,
+    },
+    {
+      id: 'squad-alpha',
+      name: 'A 队 · 采集',
+      color: DEFAULT_SQUAD_COLORS[2],
+      instructions: [],
+      instructionTimer: 0,
+      createdAt: now + 1,
+    },
+    {
+      id: 'squad-beta',
+      name: 'B 队 · 作战',
+      color: DEFAULT_SQUAD_COLORS[1],
+      instructions: [],
+      instructionTimer: 0,
+      createdAt: now + 2,
+    },
+  ];
+}
+
 export function createInitialState(level: number): GameState {
   const terrain = createTerrain(level);
   const nestPos: Position = {
@@ -658,6 +729,7 @@ export function createInitialState(level: number): GameState {
   };
   const resources = createResources(level, terrain);
   const enemies = createEnemies(level, terrain);
+  const squads = createDefaultSquads();
 
   const levels = [
     { obj: '采集 100 食物', target: 100, type: 'food' as const },
@@ -702,6 +774,8 @@ export function createInitialState(level: number): GameState {
     levelProgress: initialProgress,
     levelComplete: false,
     pheromoneMap: createPheromoneMap(),
+    squads,
+    currentSquadId: 'squad-default',
   };
 }
 

@@ -17,7 +17,11 @@ export default function InstructionEditor() {
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  const instructionTimer = state.instructionTimer;
+  const squads = state.squads;
+  const currentSquad = squads.find(s => s.id === state.currentSquadId);
+  const squadColor = currentSquad?.color ?? '#34d399';
+  const squadName = currentSquad?.name ?? '主群';
+  const instructionTimer = currentSquad?.instructionTimer ?? state.instructionTimer;
 
   const handleDragStart = (e: React.DragEvent, idx: number) => {
     setDragIndex(idx);
@@ -57,18 +61,21 @@ export default function InstructionEditor() {
 
   return (
     <div className="h-full flex flex-col rounded-xl border border-emerald-500/30 bg-gradient-to-br from-[#0a1410] to-[#0d1a14] overflow-hidden shadow-[0_0_30px_rgba(16,185,129,0.08)]">
-      <div className="px-4 py-3 border-b border-emerald-500/20 bg-black/30">
+      <div className="px-4 py-3 border-b bg-black/30" style={{ borderColor: `${squadColor}30` }}>
         <div className="flex items-center justify-between">
           <div>
-            <h3 className="text-emerald-400 font-bold tracking-wider text-sm flex items-center gap-2">
-              <span className="text-lg">⬢</span>
-              指令序列编辑器
+            <h3 className="font-bold tracking-wider text-sm flex items-center gap-2" style={{ color: squadColor }}>
+              <span
+                className="inline-block w-3 h-3 rounded-md"
+                style={{ backgroundColor: squadColor, boxShadow: `0 0 6px ${squadColor}` }}
+              />
+              指令序列 · {squadName}
             </h3>
-            <p className="text-[11px] text-emerald-500/50 mt-0.5 tracking-wider">
+            <p className="text-[11px] mt-0.5 tracking-wider" style={{ color: `${squadColor}70` }}>
               拖拽调整顺序 · 点击指令编辑参数
             </p>
           </div>
-          <div className="text-xs font-mono text-emerald-400/70 bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20">
+          <div className="text-xs font-mono px-2 py-1 rounded border" style={{ color: `${squadColor}b0`, backgroundColor: `${squadColor}12`, borderColor: `${squadColor}30` }}>
             {instructions.length} 条指令
           </div>
         </div>

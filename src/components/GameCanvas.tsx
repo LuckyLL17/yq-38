@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useGameStore } from '@/store/gameStore';
 import { GRID_CONSTANTS } from '@/game/engine';
-import type { TerrainType, Bug, Enemy, ResourceNode, GameState, PheromoneMap } from '@/game/types';
+import type { TerrainType, Bug, Enemy, ResourceNode, GameState, PheromoneMap, Squad } from '@/game/types';
 
 const { GRID_W, GRID_H, CELL } = GRID_CONSTANTS;
 const CANVAS_W = GRID_W * CELL;
@@ -145,7 +145,8 @@ export default function GameCanvas() {
 
     const draw = (ctx: CanvasRenderingContext2D) => {
       const state = stateRef.current;
-      const { terrain, bugs, enemies, resources, particles, nestPos, tick } = state;
+      const { terrain, bugs, enemies, resources, particles, nestPos, tick, squads } = state;
+      const squadColorMap = new Map(squads.map(s => [s.id, s.color]));
 
       ctx.fillStyle = '#050a08';
       ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
@@ -218,7 +219,7 @@ export default function GameCanvas() {
 
       for (const r of resources) drawResource(ctx, r, tick);
       for (const e of enemies) drawEnemy(ctx, e, tick);
-      for (const b of bugs) drawBug(ctx, b, tick);
+      for (const b of bugs) drawBug(ctx, b, tick, squadColorMap);
 
       for (const p of particles) {
         const alpha = Math.max(0, p.life / Math.max(1, p.maxLife));
@@ -374,8 +375,9 @@ export default function GameCanvas() {
   );
 }
 
-function drawBug(ctx: CanvasRenderingContext2D, bug: Bug, tick: number) {
-  const colors = BUG_COLORS[bug.role];
+function drawBug(ctx: CanvasRenderingContext2D, bug: Bug, tick: number, squadColorMap: Map<string, string>) {
+  const roleColors = BUG_COLORS[bug.role];
+  const squadColor = squadColorMap.get(bug.squadId) ?? roleColors.body;
   const angle = Math.atan2(bug.vel.vy, bug.vel.vx);
   const wobble = Math.sin(tick * 0.3 + bug.id) * 0.1;
 
@@ -383,23 +385,23 @@ function drawBug(ctx: CanvasRenderingContext2D, bug: Bug, tick: number) {
   ctx.translate(bug.pos.x, bug.pos.y);
   ctx.rotate(angle + wobble);
 
-  ctx.shadowColor = colors.glow;
+  ctx.shadowColor = squadColor + '80';
   ctx.shadowBlur = 10;
 
   const size = bug.role === 'soldier' ? 4.5 : bug.role === 'scout' ? 2.8 : 3.5;
 
-  ctx.fillStyle = colors.body;
+  ctx.fillStyle = squadColor;
   ctx.beginPath();
   ctx.ellipse(0, 0, size * 1.5, size, 0, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.shadowBlur = 0;
-  ctx.fillStyle = colors.eye;
+  ctx.fillStyle = roleColors.eye;
   safeArc(ctx, size * 0.8, -size * 0.35, size * 0.25); ctx.fill();
   safeArc(ctx, size * 0.8, size * 0.35, size * 0.25); ctx.fill();
 
   if (bug.role === 'soldier') {
-    ctx.strokeStyle = '#be185d';
+    ctx.strokeStyle = squadColor;
     ctx.lineWidth = 1.2;
     ctx.beginPath();
     ctx.moveTo(size * 1.3, -size * 0.6);
@@ -415,6 +417,10 @@ function drawBug(ctx: CanvasRenderingContext2D, bug: Bug, tick: number) {
   }
 
   ctx.restore();
+
+  ctx.fillStyle = squadColor;
+  safeArc(ctx, bug.pos.x, bug.pos.y - size - 4, 1.5);
+  ctx.fill();
 
   if (bug.hp < bug.maxHp) {
     const w = 10;

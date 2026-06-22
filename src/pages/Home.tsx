@@ -5,6 +5,7 @@ import InstructionEditor from '@/components/InstructionEditor';
 import ControlPanel from '@/components/ControlPanel';
 import InfoPanel from '@/components/InfoPanel';
 import EventTimeline from '@/components/EventTimeline';
+import SquadManager from '@/components/SquadManager';
 
 export default function Home() {
   const spawnInitialSwarm = useGameStore((s) => s.spawnInitialSwarm);
@@ -82,8 +83,13 @@ export default function Home() {
               <GameCanvas />
             </div>
           </main>
-          <aside className="min-h-0">
-            <InfoPanel />
+          <aside className="min-h-0 flex flex-col gap-3">
+            <div className="flex-[1.1] min-h-0">
+              <SquadManager />
+            </div>
+            <div className="flex-1 min-h-0">
+              <InfoPanel />
+            </div>
           </aside>
           <aside className="min-h-0">
             <EventTimeline />

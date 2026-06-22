@@ -30,6 +30,7 @@ export interface Bug {
   carryCapacity: number;
   carrying: number;
   role: 'worker' | 'soldier' | 'scout';
+  squadId: string;
   instructionPointer: number;
   cooldown: number;
   wanderAngle: number;
@@ -84,6 +85,15 @@ export interface PheromoneMap {
   maxStrength: number;
 }
 
+export interface Squad {
+  id: string;
+  name: string;
+  color: string;
+  instructions: Instruction[];
+  instructionTimer: number;
+  createdAt: number;
+}
+
 export interface GameState {
   bugs: Bug[];
   enemies: Enemy[];
@@ -111,6 +121,8 @@ export interface GameState {
   levelProgress: number;
   levelComplete: boolean;
   pheromoneMap: PheromoneMap;
+  squads: Squad[];
+  currentSquadId: string;
 }
 
 export interface InstructionPreset {
@@ -143,6 +155,7 @@ export interface StateSnapshot {
   tick: number;
   state: GameState;
   instructions: Instruction[];
+  squads: Squad[];
 }
 
 export interface EventHistory {
@@ -156,10 +169,10 @@ export interface EventHistory {
 export interface EventRecorderAPI {
   history: EventHistory;
   recordEvent: (type: EventType, data: Record<string, unknown>) => void;
-  takeSnapshot: (state: GameState, instructions: Instruction[]) => void;
-  seekToTick: (targetTick: number) => { state: GameState; instructions: Instruction[] } | null;
-  stepForward: () => { state: GameState; instructions: Instruction[] } | null;
-  stepBackward: () => { state: GameState; instructions: Instruction[] } | null;
+  takeSnapshot: (state: GameState, instructions: Instruction[], squads: Squad[]) => void;
+  seekToTick: (targetTick: number) => { state: GameState; instructions: Instruction[]; squads: Squad[] } | null;
+  stepForward: () => { state: GameState; instructions: Instruction[]; squads: Squad[] } | null;
+  stepBackward: () => { state: GameState; instructions: Instruction[]; squads: Squad[] } | null;
   getEventsInRange: (startTick: number, endTick: number) => GameEvent[];
   enterRewindMode: () => void;
   exitRewindMode: () => void;
@@ -199,6 +212,19 @@ export interface GameStore {
   stepBackward: () => void;
   stepForward: () => void;
   toggleRewindMode: () => void;
+  createSquad: (name: string, color?: string) => void;
+  deleteSquad: (squadId: string) => void;
+  renameSquad: (squadId: string, name: string) => void;
+  setSquadColor: (squadId: string, color: string) => void;
+  setCurrentSquad: (squadId: string) => void;
+  setSquadInstructions: (squadId: string, instructions: Instruction[]) => void;
+  addSquadInstruction: (squadId: string, type: InstructionType, index?: number) => void;
+  removeSquadInstruction: (squadId: string, instructionId: string) => void;
+  moveSquadInstruction: (squadId: string, from: number, to: number) => void;
+  assignBugToSquad: (bugId: number, squadId: string) => void;
+  assignBulkToSquad: (bugIds: number[], squadId: string) => void;
+  assignAllToSquad: (squadId: string) => void;
+  splitSquadByRole: (sourceSquadId: string) => void;
 }
 
 export const INSTRUCTION_META: Record<InstructionType, {

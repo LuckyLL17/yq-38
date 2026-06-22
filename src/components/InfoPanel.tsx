@@ -4,7 +4,7 @@ import { INSTRUCTION_META } from '@/game/types';
 
 export default function InfoPanel() {
   const { state } = useGameStore();
-  const { bugs, levelObjective, levelProgress, levelTarget, totalFood, totalCrystal, enemiesKilled, resources } = state;
+  const { bugs, levelObjective, levelProgress, levelTarget, totalFood, totalCrystal, enemiesKilled, resources, squads } = state;
 
   const roles = {
     worker: bugs.filter((b) => b.role === 'worker').length,
@@ -56,6 +56,34 @@ export default function InfoPanel() {
           <StatCard icon={<Skull size={13} />} label="敌人击杀" value={enemiesKilled} sub={`剩余${state.enemies.length}`} color="#f87171" />
           <StatCard icon={<Leaf size={13} />} label="食物储备" value={totalFood} sub={`资源点${resources.length}`} color="#fbbf24" />
           <StatCard icon={<Gem size={13} />} label="水晶储量" value={totalCrystal} sub={`剩余${remainingResources}`} color="#a78bfa" />
+        </div>
+
+        <div className="p-2.5 rounded-lg border border-cyan-500/15 bg-cyan-500/5">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-[10px] font-bold tracking-wider text-cyan-400">编组分布 · {squads.length} SQUADS</span>
+          </div>
+          <div className="space-y-1">
+            {squads.map((squad) => {
+              const count = bugs.filter(b => b.squadId === squad.id).length;
+              const pct = bugs.length > 0 ? (count / bugs.length) * 100 : 0;
+              return (
+                <div key={squad.id} className="flex items-center gap-1.5">
+                  <span
+                    className="w-2 h-2 rounded-sm shrink-0"
+                    style={{ backgroundColor: squad.color, boxShadow: `0 0 4px ${squad.color}` }}
+                  />
+                  <span className="text-[9px] text-white/60 w-14 truncate">{squad.name}</span>
+                  <div className="flex-1 h-1 rounded-full bg-black/40 overflow-hidden">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{ width: `${pct}%`, backgroundColor: squad.color }}
+                    />
+                  </div>
+                  <span className="text-[9px] font-mono text-white/50 w-4 text-right">{count}</span>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         <div className="p-3 rounded-lg border border-white/10 bg-black/25">
