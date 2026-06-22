@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useGameStore } from '@/store/gameStore';
 import { INSTRUCTION_META, CONDITION_LABELS } from '@/game/types';
-import type { InstructionType, Instruction, ConditionType } from '@/game/types';
+import type { InstructionType, Instruction, ConditionType, Squad, GameState } from '@/game/types';
+import { getActiveExecutableInstruction, evaluateCondition } from '@/game/engine';
 import {
   GripVertical,
   Trash2,
@@ -12,18 +13,65 @@ import {
   Plus,
 } from 'lucide-react';
 
+interface ExecutionState {
+  activeInstructionId: string | null;
+  activeStackIds: Set<string>;
+  activeElseBranchIds: Set<string>;
+  instructionTimer: number;
+}
+
+function computeExecutionState(squad: Squad, state: GameState): ExecutionState {
+  const result: ExecutionState = {
+    activeInstructionId: null,
+    activeStackIds: new Set(),
+    activeElseBranchIds: new Set(),
+    instructionTimer: squad.instructionTimer,
+  };
+
+  for (const frame of squad.executionStack) {
+    result.activeStackIds.add(frame.instructionId);
+  }
+
+  const activeLeaf = getActiveExecutableInstruction(squad, state);
+  if (activeLeaf) {
+    result.activeInstructionId = activeLeaf.id;
+    result.activeStackIds.add(activeLeaf.id);
+  }
+
+  let currentList = squad.instructions;
+  for (const frame of squad.executionStack) {
+    const inst = currentList.find(i => i.id === frame.instructionId);
+    if (!inst) break;
+    if (inst.type === 'IF') {
+      const condMet = isIfConditionMet(inst, squad, state);
+      if (!condMet) {
+        result.activeElseBranchIds.add(inst.id);
+      }
+      currentList = condMet ? (inst.children ?? []) : (inst.elseChildren ?? []);
+    } else if (inst.type === 'LOOP') {
+      currentList = inst.children ?? [];
+    }
+  }
+
+  return result;
+}
+
+function isIfConditionMet(inst: Instruction, squad: Squad, state: GameState): boolean {
+  if (inst.type !== 'IF' || !inst.condition) return true;
+  return evaluateCondition(inst.condition, inst.conditionParam, state, squad);
+}
+
 interface InstructionNodeProps {
   inst: Instruction;
   depth: number;
   index: number;
   parentId?: string;
   branch?: 'if' | 'else';
-  flatIndex: number;
-  totalFlat: number;
   onEdit: (id: string) => void;
   editingId: string | null;
-  instructionTimer: number;
+  executionState: ExecutionState;
   squadColor: string;
+  activeBranchForParent?: 'if' | 'else' | null;
 }
 
 function countFlat(instructions: Instruction[]): number {
@@ -46,12 +94,11 @@ function InstructionNode({
   index,
   parentId,
   branch,
-  flatIndex,
-  totalFlat,
   onEdit,
   editingId,
-  instructionTimer,
+  executionState,
   squadColor,
+  activeBranchForParent,
 }: InstructionNodeProps) {
   const {
     state,
@@ -65,9 +112,13 @@ function InstructionNode({
 
   const meta = INSTRUCTION_META[inst.type];
   const isEditing = editingId === inst.id;
-  const isExecuting = flatIndex === 0;
+  const isActiveLeaf = executionState.activeInstructionId === inst.id;
+  const isOnStack = executionState.activeStackIds.has(inst.id);
+  const isExecuting = isOnStack;
   const isLogicBlock = inst.type === 'IF' || inst.type === 'LOOP' || inst.type === 'ELSE';
   const conditionLabel = inst.condition ? CONDITION_LABELS[inst.condition] : null;
+
+  const ifUsesElseBranch = inst.type === 'IF' && executionState.activeElseBranchIds.has(inst.id);
 
   const childrenToRender: { list: Instruction[] | undefined; label: string; color: string; key: string; branch: 'if' | 'else' }[] = [];
   if (inst.type === 'IF') {
@@ -80,7 +131,7 @@ function InstructionNode({
   return (
     <div className="space-y-1">
       <div
-        className={`relative group transition-all duration-200 cursor-pointer ${isExecuting ? '' : ''}`}
+        className={`relative group transition-all duration-200 cursor-pointer`}
         style={{ paddingLeft: `${depth * 16}px` }}
       >
         {depth > 0 && (
@@ -97,9 +148,17 @@ function InstructionNode({
           className="flex items-stretch gap-2 rounded-lg border backdrop-blur-sm overflow-hidden transition-all"
           style={{
             backgroundColor: meta.bgColor,
-            borderColor: meta.borderColor + '50',
+            borderColor: isActiveLeaf
+              ? meta.color + 'a0'
+              : isOnStack
+              ? meta.color + '60'
+              : meta.borderColor + '50',
             boxShadow: isEditing
               ? `0 0 15px ${meta.color}40, inset 0 0 15px ${meta.color}15`
+              : isActiveLeaf
+              ? `0 0 12px ${meta.color}40`
+              : isOnStack
+              ? `0 0 6px ${meta.color}20`
               : 'none',
             marginLeft: depth > 0 ? '6px' : '0',
           }}
@@ -151,7 +210,7 @@ function InstructionNode({
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="font-bold text-sm" style={{ color: meta.color }}>
-                  {String(flatIndex + 1).padStart(2, '0')} · {meta.name}
+                  {meta.name}
                 </span>
                 <span
                   className="text-[10px] font-mono px-1.5 py-0.5 rounded opacity-60"
@@ -159,7 +218,12 @@ function InstructionNode({
                 >
                   {inst.type}
                 </span>
-                {isExecuting && (
+                {isActiveLeaf && !isLogicBlock && (
+                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 animate-pulse">
+                    执行中
+                  </span>
+                )}
+                {isOnStack && isLogicBlock && (
                   <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 animate-pulse">
                     执行中
                   </span>
@@ -183,13 +247,13 @@ function InstructionNode({
                 )}
               </div>
 
-              {isExecuting && inst.type !== 'IF' && inst.type !== 'LOOP' && inst.type !== 'ELSE' && (
+              {isActiveLeaf && !isLogicBlock && (
                 <div className="mt-1.5 mb-1">
                   <div className="relative h-1.5 rounded-full bg-black/40 overflow-hidden">
                     <div
                       className="absolute inset-y-0 left-0 rounded-full transition-all duration-150"
                       style={{
-                        width: `${Math.max(0, Math.min(100, (instructionTimer / Math.max(1, inst.duration)) * 100))}%`,
+                        width: `${Math.max(0, Math.min(100, (executionState.instructionTimer / Math.max(1, inst.duration)) * 100))}%`,
                         background: `linear-gradient(90deg, ${meta.color}, ${meta.color}80)`,
                         boxShadow: `0 0 6px ${meta.color}80`,
                       }}
@@ -199,7 +263,7 @@ function InstructionNode({
                     className="flex justify-between text-[9px] font-mono mt-0.5 opacity-70"
                     style={{ color: meta.color }}
                   >
-                    <span>剩余 {Math.max(0, instructionTimer)} tick</span>
+                    <span>剩余 {Math.max(0, executionState.instructionTimer)} tick</span>
                     <span>时长 {inst.duration}</span>
                   </div>
                 </div>
@@ -390,24 +454,27 @@ function InstructionNode({
         </div>
       </div>
 
-      {!inst.collapsed && childrenToRender.map((group) => (
-        <div key={group.key}>
-          {group.list && group.list.length > 0 && (
-            <div
-              className="text-[9px] font-mono tracking-wider px-2 py-0.5 mt-1 mb-0.5 rounded inline-block ml-1"
-              style={{
-                marginLeft: `${depth * 16 + 12}px`,
-                backgroundColor: group.color + '12',
-                color: group.color,
-                borderLeft: `2px solid ${group.color}60`,
-              }}
-            >
-              {group.label}
-            </div>
-          )}
-          {group.list && group.list.map((child, ci) => {
-            const beforeCount = countFlat(group.list!.slice(0, ci));
-            return (
+      {!inst.collapsed && childrenToRender.map((group) => {
+        const isGroupActive = isOnStack && inst.type === 'IF'
+          ? ((group.branch === 'else') === ifUsesElseBranch)
+          : isOnStack;
+
+        return (
+          <div key={group.key}>
+            {group.list && group.list.length > 0 && (
+              <div
+                className={`text-[9px] font-mono tracking-wider px-2 py-0.5 mt-1 mb-0.5 rounded inline-block ml-1 ${isGroupActive ? 'opacity-100' : 'opacity-50'}`}
+                style={{
+                  marginLeft: `${depth * 16 + 12}px`,
+                  backgroundColor: group.color + (isGroupActive ? '20' : '08'),
+                  color: group.color,
+                  borderLeft: `2px solid ${group.color}${isGroupActive ? '80' : '30'}`,
+                }}
+              >
+                {group.label}
+              </div>
+            )}
+            {group.list && group.list.map((child, ci) => (
               <InstructionNode
                 key={child.id}
                 inst={child}
@@ -415,33 +482,18 @@ function InstructionNode({
                 index={ci}
                 parentId={inst.id}
                 branch={group.branch}
-                flatIndex={-1}
-                totalFlat={-1}
                 onEdit={onEdit}
                 editingId={editingId}
-                instructionTimer={-1}
+                executionState={executionState}
                 squadColor={squadColor}
+                activeBranchForParent={isGroupActive ? group.branch : null}
               />
-            );
-          })}
-        </div>
-      ))}
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
-}
-
-function flattenInstructions(instructions: Instruction[]): Instruction[] {
-  const result: Instruction[] = [];
-  for (const inst of instructions) {
-    result.push(inst);
-    if (inst.type === 'IF') {
-      result.push(...flattenInstructions(inst.children ?? []));
-      result.push(...flattenInstructions(inst.elseChildren ?? []));
-    } else if (inst.type === 'LOOP') {
-      result.push(...flattenInstructions(inst.children ?? []));
-    }
-  }
-  return result;
 }
 
 export default function InstructionEditor() {
@@ -456,9 +508,19 @@ export default function InstructionEditor() {
   const currentSquad = squads.find((s) => s.id === state.currentSquadId);
   const squadColor = currentSquad?.color ?? '#34d399';
   const squadName = currentSquad?.name ?? '主群';
-  const instructionTimer = currentSquad?.instructionTimer ?? state.instructionTimer;
 
-  const flatInstructions = flattenInstructions(instructions);
+  const executionState = useMemo<ExecutionState>(() => {
+    if (!currentSquad) {
+      return {
+        activeInstructionId: null,
+        activeStackIds: new Set(),
+        activeElseBranchIds: new Set(),
+        instructionTimer: 0,
+      };
+    }
+    return computeExecutionState(currentSquad, state);
+  }, [currentSquad, state]);
+
   const totalCount = countFlat(instructions);
 
   return (
@@ -508,11 +570,9 @@ export default function InstructionEditor() {
             inst={inst}
             depth={0}
             index={idx}
-            flatIndex={idx}
-            totalFlat={flatInstructions.length}
             onEdit={(id) => setEditingId(editingId === id ? null : id)}
             editingId={editingId}
-            instructionTimer={instructionTimer}
+            executionState={executionState}
             squadColor={squadColor}
           />
         ))}
