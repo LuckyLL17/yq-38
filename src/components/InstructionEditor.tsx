@@ -90,7 +90,10 @@ function InstructionNode({
           />
         )}
         <div
-          onClick={() => onEdit(inst.id)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit(inst.id);
+          }}
           className="flex items-stretch gap-2 rounded-lg border backdrop-blur-sm overflow-hidden transition-all"
           style={{
             backgroundColor: meta.bgColor,

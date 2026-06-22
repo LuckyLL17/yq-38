@@ -1271,9 +1271,11 @@ export function stepSquadInstructions(
   const result: StepResult = { instructionSwitched: false };
   if (squad.instructions.length === 0) return result;
 
+  let instructionJustCompleted = false;
   if (squad.instructionTimer > 0) {
     squad.instructionTimer--;
     if (squad.instructionTimer > 0) return result;
+    instructionJustCompleted = true;
   }
 
   let currentList = squad.instructions;
@@ -1297,6 +1299,42 @@ export function stepSquadInstructions(
     }
   }
 
+  if (instructionJustCompleted && currentList.length > 0) {
+    const first = currentList[0];
+    if (first.type !== 'IF' && first.type !== 'LOOP') {
+      currentList.shift();
+      result.instructionSwitched = true;
+      while (currentList.length === 0 && squad.executionStack.length > 0) {
+        const topFrame = squad.executionStack[squad.executionStack.length - 1];
+        const parentList = parentLists[parentLists.length - 1];
+        const topLoc = findInstructionLocation(parentList, topFrame.instructionId);
+        if (!topLoc) break;
+        const topInst = topLoc.list[topLoc.index];
+
+        if (topInst.type === 'LOOP') {
+          const maxLoops = topInst.param ?? 0;
+          if (maxLoops === 0 || topFrame.loopCounter < maxLoops) {
+            topFrame.loopCounter++;
+            currentList = topInst.children ?? [];
+            if (currentList.length > 0) break;
+          }
+        }
+
+        squad.executionStack.pop();
+        parentLists.pop();
+
+        const parentParentList = parentLists.length > 0 ? parentLists[parentLists.length - 1] : squad.instructions;
+        const parentLoc = findInstructionLocation(parentParentList, topInst.id);
+        if (parentLoc) {
+          parentLoc.list.splice(parentLoc.index, 1);
+          currentList = parentLoc.list;
+        }
+      }
+      if (squad.instructions.length === 0) return result;
+      return stepSquadInstructions(squad, state);
+    }
+  }
+
   if (currentList.length > 0) {
     const first = currentList[0];
 
@@ -1316,9 +1354,6 @@ export function stepSquadInstructions(
         currentList.shift();
         squad.executionStack = squad.executionStack.filter(f => f.instructionId !== first.id);
         result.instructionSwitched = true;
-        const nextLeaf = resolveActiveInstruction(squad, state);
-        result.nextType = nextLeaf?.type;
-        result.remainingCount = countInstructions(squad.instructions);
         return stepSquadInstructions(squad, state);
       }
       frame.loopCounter++;
@@ -1329,55 +1364,14 @@ export function stepSquadInstructions(
       if (first.duration > 0) {
         squad.instructionTimer = first.duration;
       }
-      if (currentList.length > 1 || squad.executionStack.length > 0) {
-        currentList.shift();
-        if (squad.instructionTimer <= 0) {
-          result.instructionSwitched = true;
-          return stepSquadInstructions(squad, state);
-        }
-        result.instructionSwitched = true;
-        const nextLeaf = resolveActiveInstruction(squad, state);
-        result.nextType = nextLeaf?.type;
-        result.remainingCount = countInstructions(squad.instructions);
-        return result;
-      } else {
-        currentList.shift();
-        while (squad.executionStack.length > 0) {
-          const topFrame = squad.executionStack[squad.executionStack.length - 1];
-          const parentList = parentLists[parentLists.length - 1];
-          const topLoc = findInstructionLocation(parentList, topFrame.instructionId);
-          if (!topLoc) break;
-          const topInst = topLoc.list[topLoc.index];
-
-          if (topInst.type === 'LOOP') {
-            const maxLoops = topInst.param ?? 0;
-            if (maxLoops === 0 || topFrame.loopCounter < maxLoops) {
-              topFrame.loopCounter++;
-              const nextLeaf = resolveActiveInstruction(squad, state);
-              result.nextType = nextLeaf?.type;
-              result.remainingCount = countInstructions(squad.instructions);
-              result.instructionSwitched = true;
-              return stepSquadInstructions(squad, state);
-            }
-          }
-
-          squad.executionStack.pop();
-          parentLists.pop();
-
-          const parentParentList = parentLists.length > 0 ? parentLists[parentLists.length - 1] : squad.instructions;
-          const parentLoc = findInstructionLocation(parentParentList, topInst.id);
-          if (parentLoc) {
-            parentLoc.list.splice(parentLoc.index, 1);
-            if (parentLoc.list.length > 0) {
-              result.instructionSwitched = true;
-              const nextLeaf = resolveActiveInstruction(squad, state);
-              result.nextType = nextLeaf?.type;
-              result.remainingCount = countInstructions(squad.instructions);
-              return stepSquadInstructions(squad, state);
-            }
-          }
-        }
+      const nextLeaf = resolveActiveInstruction(squad, state);
+      result.nextType = nextLeaf?.type;
+      result.remainingCount = countInstructions(squad.instructions);
+      if (!result.instructionSwitched) result.instructionSwitched = true;
+      if (squad.instructionTimer <= 0) {
+        return stepSquadInstructions(squad, state);
       }
+      return result;
     }
   } else {
     while (squad.executionStack.length > 0) {
@@ -1392,9 +1386,6 @@ export function stepSquadInstructions(
         if (maxLoops === 0 || topFrame.loopCounter < maxLoops) {
           topFrame.loopCounter++;
           result.instructionSwitched = true;
-          const nextLeaf = resolveActiveInstruction(squad, state);
-          result.nextType = nextLeaf?.type;
-          result.remainingCount = countInstructions(squad.instructions);
           return stepSquadInstructions(squad, state);
         }
       }
@@ -1408,9 +1399,6 @@ export function stepSquadInstructions(
         parentLoc.list.splice(parentLoc.index, 1);
         if (parentLoc.list.length > 0) {
           result.instructionSwitched = true;
-          const nextLeaf = resolveActiveInstruction(squad, state);
-          result.nextType = nextLeaf?.type;
-          result.remainingCount = countInstructions(squad.instructions);
           return stepSquadInstructions(squad, state);
         }
       }
