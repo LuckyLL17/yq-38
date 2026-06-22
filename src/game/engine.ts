@@ -11,6 +11,15 @@ import type {
   PheromoneMap,
   PheromoneCell,
   Squad,
+  Mutation,
+  MutationType,
+  SwarmEvolution,
+} from './types';
+import {
+  MUTATION_LIBRARY,
+  RARITY_WEIGHTS,
+  calcExpToNext,
+  getExpReward,
 } from './types';
 
 const GRID_W = 60;
@@ -218,6 +227,11 @@ export function createBug(
     cooldown: 0,
     wanderAngle: angle,
     age: 0,
+    exp: 0,
+    level: 1,
+    mutations: [],
+    expToNext: calcExpToNext(1),
+    mutationReady: false,
   };
 }
 
@@ -273,15 +287,112 @@ function addParticle(
   }
 }
 
+export function createSwarmEvolution(): SwarmEvolution {
+  return {
+    totalExp: 0,
+    evolutionLevel: 1,
+    evolutionPoints: 0,
+    unlockedMutations: [],
+    mutationHistory: [],
+    totalMutations: 0,
+    legendaryMutations: 0,
+  };
+}
+
+export function selectRandomMutation(existingTypes: MutationType[] = []): Mutation {
+  const availableTypes = (Object.keys(MUTATION_LIBRARY) as MutationType[]).filter(
+    (t) => !existingTypes.includes(t)
+  );
+  const pool = availableTypes.length > 0 ? availableTypes : (Object.keys(MUTATION_LIBRARY) as MutationType[]);
+
+  const totalWeight = pool.reduce(
+    (sum, t) => sum + RARITY_WEIGHTS[MUTATION_LIBRARY[t].rarity],
+    0
+  );
+  let roll = Math.random() * totalWeight;
+
+  for (const t of pool) {
+    const m = MUTATION_LIBRARY[t];
+    roll -= RARITY_WEIGHTS[m.rarity];
+    if (roll <= 0) return { ...m };
+  }
+  return { ...MUTATION_LIBRARY[pool[0]] };
+}
+
+export function applyMutationStats(bug: Bug, mutation: Mutation): Bug {
+  const b = { ...bug, mutations: [...bug.mutations, mutation.id] };
+  switch (mutation.ability) {
+    case 'hp_boost':
+      b.maxHp = Math.floor(b.maxHp * (1 + mutation.value));
+      b.hp = Math.min(b.maxHp, b.hp + (b.maxHp - bug.maxHp));
+      break;
+    case 'carry_boost':
+      b.carryCapacity = Math.floor(b.carryCapacity * (1 + mutation.value));
+      break;
+  }
+  return b;
+}
+
+export function addExpToBug(bug: Bug, amount: number): { bug: Bug; leveledUp: boolean; levelsGained: number } {
+  const b = { ...bug };
+  b.exp += amount;
+  let levelsGained = 0;
+  while (b.exp >= b.expToNext && b.level < 20) {
+    b.exp -= b.expToNext;
+    b.level++;
+    b.expToNext = calcExpToNext(b.level);
+    levelsGained++;
+    b.maxHp = Math.floor(b.maxHp * 1.08);
+    b.hp = b.maxHp;
+    b.attackPower = Math.max(1, Math.floor(b.attackPower * 1.12));
+  }
+  if (levelsGained > 0) {
+    b.mutationReady = true;
+  }
+  return { bug: b, leveledUp: levelsGained > 0, levelsGained };
+}
+
+export function getBugAbilityValue(bug: Bug, mutationsMap: Map<string, Mutation>, ability: string): number {
+  let total = 0;
+  for (const mid of bug.mutations) {
+    const m = mutationsMap.get(mid);
+    if (m && m.ability === ability) total += m.value;
+  }
+  return total;
+}
+
+export function createMutationsMap(): Map<string, Mutation> {
+  const map = new Map<string, Mutation>();
+  for (const key of Object.keys(MUTATION_LIBRARY) as MutationType[]) {
+    map.set(MUTATION_LIBRARY[key].id, MUTATION_LIBRARY[key]);
+  }
+  return map;
+}
+
+export function calcSwarmEvolutionLevel(totalExp: number): number {
+  if (totalExp < 500) return 1;
+  if (totalExp < 1500) return 2;
+  if (totalExp < 4000) return 3;
+  if (totalExp < 10000) return 4;
+  if (totalExp < 25000) return 5;
+  if (totalExp < 60000) return 6;
+  if (totalExp < 150000) return 7;
+  return 8;
+}
+
 export interface SimulationContext {
   instructions: Instruction[];
   squads: Squad[];
-  onFoodGained?: (n: number, pos: Position) => void;
-  onCrystalGained?: (n: number, pos: Position) => void;
-  onEnemyKilled?: (enemy: Enemy) => void;
-  onResourceCollected?: (resourceId: number, amount: number, type: 'food' | 'crystal', pos: Position) => void;
+  onFoodGained?: (n: number, pos: Position, bugId?: number) => void;
+  onCrystalGained?: (n: number, pos: Position, bugId?: number) => void;
+  onEnemyKilled?: (enemy: Enemy, killerBugId?: number) => void;
+  onResourceCollected?: (resourceId: number, amount: number, type: 'food' | 'crystal', pos: Position, bugId?: number) => void;
   onBugDied?: (bug: Bug) => void;
   onBugBorn?: (bug: Bug) => void;
+  onBugExp?: (bugId: number, amount: number, source: string) => void;
+  onBugLevelUp?: (bugId: number, level: number) => void;
+  onBugMutation?: (bugId: number, mutation: Mutation) => void;
+  onSwarmEvolution?: (newLevel: number, totalExp: number) => void;
 }
 
 export function simulateStep(
@@ -290,24 +401,55 @@ export function simulateStep(
 ): GameState {
   if (state.paused) return state;
 
-  const { terrain, nestPos, squads } = state;
+  const { terrain, nestPos, squads, evolution } = state;
   const newParticles = [...state.particles];
   const pid = { v: (state.particles[state.particles.length - 1]?.id ?? 0) + 1 };
   const newPheromoneMap = clonePheromoneMap(state.pheromoneMap);
+  const mutationsMap = createMutationsMap();
 
   const deltaFood = { v: 0 };
   const deltaCrystal = { v: 0 };
   const deltaKills = { v: 0 };
   const deltaCollected = { v: 0 };
+  const deltaExpTotal = { v: 0 };
+  const pendingMutations: GameState['pendingMutations'] = [...state.pendingMutations];
+
+  const bugExpDeltas = new Map<number, { amount: number; source: string }[]>();
+  const addBugExp = (bugId: number, amount: number, source: string) => {
+    if (!bugExpDeltas.has(bugId)) bugExpDeltas.set(bugId, []);
+    bugExpDeltas.get(bugId)!.push({ amount, source });
+    deltaExpTotal.v += amount;
+  };
+
   const ctxWrap: SimulationContext = {
     instructions: ctx.instructions,
     squads: ctx.squads,
-    onFoodGained: (n, pos) => { deltaFood.v += n; ctx.onFoodGained?.(n, pos); },
-    onCrystalGained: (n, pos) => { deltaCrystal.v += n; ctx.onCrystalGained?.(n, pos); },
-    onEnemyKilled: (enemy) => { deltaKills.v += 1; ctx.onEnemyKilled?.(enemy); },
-    onResourceCollected: (rid, amt, type, pos) => { deltaCollected.v += 1; ctx.onResourceCollected?.(rid, amt, type, pos); },
+    onFoodGained: (n, pos, bugId) => {
+      deltaFood.v += n;
+      ctx.onFoodGained?.(n, pos, bugId);
+      if (bugId !== undefined) addBugExp(bugId, getExpReward('deposit_food') * n, 'deposit_food');
+    },
+    onCrystalGained: (n, pos, bugId) => {
+      deltaCrystal.v += n;
+      ctx.onCrystalGained?.(n, pos, bugId);
+      if (bugId !== undefined) addBugExp(bugId, getExpReward('deposit_crystal') * n, 'deposit_crystal');
+    },
+    onEnemyKilled: (enemy, killerBugId) => {
+      deltaKills.v += 1;
+      ctx.onEnemyKilled?.(enemy, killerBugId);
+      if (killerBugId !== undefined) addBugExp(killerBugId, getExpReward('kill'), 'kill');
+    },
+    onResourceCollected: (rid, amt, type, pos, bugId) => {
+      deltaCollected.v += 1;
+      ctx.onResourceCollected?.(rid, amt, type, pos, bugId);
+      if (bugId !== undefined) addBugExp(bugId, getExpReward('collect'), 'collect');
+    },
     onBugDied: (bug) => { ctx.onBugDied?.(bug); },
     onBugBorn: ctx.onBugBorn,
+    onBugExp: ctx.onBugExp,
+    onBugLevelUp: ctx.onBugLevelUp,
+    onBugMutation: ctx.onBugMutation,
+    onSwarmEvolution: ctx.onSwarmEvolution,
   };
 
   const newBugs = state.bugs.map(b => ({ ...b, vel: { ...b.vel }, pos: { ...b.pos } }));
@@ -320,9 +462,19 @@ export function simulateStep(
     bug.age++;
     bug.cooldown = Math.max(0, bug.cooldown - 1);
     const terrainAt = getTerrainAt(terrain, bug.pos.x, bug.pos.y);
-    const speedMul = terrainSpeedMul(terrainAt);
+
+    const hasGlide = getBugAbilityValue(bug, mutationsMap, 'glide_terrain') > 0;
+    const speedMul = hasGlide ? 1.0 : terrainSpeedMul(terrainAt);
+    const speedBoost = 1 + getBugAbilityValue(bug, mutationsMap, 'speed_boost');
+    const hpRegenVal = getBugAbilityValue(bug, mutationsMap, 'hp_regen');
+    if (hpRegenVal > 0 && bug.hp < bug.maxHp) {
+      bug.hp = Math.min(bug.maxHp, bug.hp + hpRegenVal);
+    }
+    if (bug.age % 180 === 0) {
+      addBugExp(bug.id, getExpReward('survive'), 'survive');
+    }
     const baseSpeed = bug.role === 'scout' ? 1.4 : bug.role === 'soldier' ? 0.85 : 1.05;
-    const speed = 1.2 * baseSpeed * speedMul;
+    const speed = 1.2 * baseSpeed * speedMul * speedBoost;
 
     const squad = squadMap.get(bug.squadId);
     const squadInstructions = squad?.instructions ?? [];
@@ -371,13 +523,16 @@ export function simulateStep(
             break;
           }
           case 'COLLECT': {
+            const resSenseMul = 1 + getBugAbilityValue(bug, mutationsMap, 'resource_detect');
+            const visionMul = 1 + getBugAbilityValue(bug, mutationsMap, 'vision_range');
             let nearestRes: ResourceNode | null = null;
             let nearestD = Infinity;
             for (const r of newResources) {
               if (r.amount <= 0) continue;
               const d = dist(bug.pos, r.pos);
-              if (d < nearestD) {
-                nearestD = d;
+              const effectiveD = d / (resSenseMul * visionMul);
+              if (effectiveD < nearestD) {
+                nearestD = effectiveD;
                 nearestRes = r;
               }
             }
@@ -391,10 +546,10 @@ export function simulateStep(
                 if (bug.carrying > 0) {
                   const nearest = nearestRes;
                   if (nearest && nearest.type === 'crystal') {
-                    ctxWrap.onCrystalGained?.(bug.carrying, { ...bug.pos });
+                    ctxWrap.onCrystalGained?.(bug.carrying, { ...bug.pos }, bug.id);
                     addParticle(newParticles, pid, bug.pos, '#a78bfa', 3, 5);
                   } else {
-                    ctxWrap.onFoodGained?.(bug.carrying, { ...bug.pos });
+                    ctxWrap.onFoodGained?.(bug.carrying, { ...bug.pos }, bug.id);
                     addParticle(newParticles, pid, bug.pos, '#fbbf24', 3, 5);
                   }
                   bug.carrying = 0;
@@ -410,7 +565,7 @@ export function simulateStep(
                 const take = Math.min(bug.carryCapacity - bug.carrying, 3, nearestRes.amount);
                 bug.carrying += take;
                 nearestRes.amount -= take;
-                ctxWrap.onResourceCollected?.(nearestRes.id, take, nearestRes.type, { ...nearestRes.pos });
+                ctxWrap.onResourceCollected?.(nearestRes.id, take, nearestRes.type, { ...nearestRes.pos }, bug.id);
                 bug.cooldown = 10;
                 addParticle(newParticles, pid, nearestRes.pos,
                   nearestRes.type === 'crystal' ? '#a78bfa' : '#fbbf24', 2, 2);
@@ -424,12 +579,23 @@ export function simulateStep(
           }
           case 'ATTACK': {
             const atkRange = cur.param ?? 50;
+            const atkRangeMul = 1 + getBugAbilityValue(bug, mutationsMap, 'vision_range') * 0.3;
+            const damageBoost = 1 + getBugAbilityValue(bug, mutationsMap, 'damage_boost');
+            const poisonVal = getBugAbilityValue(bug, mutationsMap, 'attack_poison');
+            const swarmDmgVal = getBugAbilityValue(bug, mutationsMap, 'swarm_damage');
+            let nearbyAllies = 0;
+            if (swarmDmgVal > 0) {
+              for (const other of newBugs) {
+                if (other.id !== bug.id && dist(bug.pos, other.pos) < 60) nearbyAllies++;
+              }
+            }
+            const swarmMul = 1 + nearbyAllies * swarmDmgVal;
             let nearestEnemy: Enemy | null = null;
             let nearestD = Infinity;
             for (const e of newEnemies) {
               if (e.hp <= 0) continue;
               const d = dist(bug.pos, e.pos);
-              if (d < nearestD && d < atkRange * 2.5) {
+              if (d < nearestD && d < atkRange * 2.5 * atkRangeMul) {
                 nearestD = d;
                 nearestEnemy = e;
               }
@@ -441,14 +607,16 @@ export function simulateStep(
               const aggroMul = bug.role === 'soldier' ? 1.4 : 1.0;
               bug.vel.vx += nx * 0.24 * aggroMul;
               bug.vel.vy += ny * 0.24 * aggroMul;
-              if (nearestD < atkRange && bug.cooldown <= 0) {
+              if (nearestD < atkRange * atkRangeMul && bug.cooldown <= 0) {
                 const atkMul = terrainAttackMul(terrainAt);
-                const dmg = bug.attackPower * atkMul * (bug.role === 'soldier' ? 1.3 : 1);
+                let dmg = bug.attackPower * atkMul * (bug.role === 'soldier' ? 1.3 : 1);
+                dmg *= damageBoost * swarmMul;
+                if (poisonVal > 0) dmg *= 1 + poisonVal;
                 nearestEnemy.hp -= dmg;
                 bug.cooldown = 18;
                 addParticle(newParticles, pid, nearestEnemy.pos, '#f87171', 3, 3);
                 if (nearestEnemy.hp <= 0) {
-                  ctxWrap.onEnemyKilled?.(nearestEnemy);
+                  ctxWrap.onEnemyKilled?.(nearestEnemy, bug.id);
                   addParticle(newParticles, pid, nearestEnemy.pos, '#ef4444', 4, 10);
                 }
               }
@@ -576,8 +744,9 @@ export function simulateStep(
       bug.hp = Math.min(bug.maxHp, bug.hp + 0.15);
     }
 
+    const pheroBoost = 1 + getBugAbilityValue(bug, mutationsMap, 'pheromone_strength');
     const depositMul = bug.role === 'scout' ? 1.4 : bug.role === 'soldier' ? 1.1 : 1.0;
-    depositPheromone(newPheromoneMap, bug.pos.x, bug.pos.y, newPheromoneMap.depositAmount * depositMul);
+    depositPheromone(newPheromoneMap, bug.pos.x, bug.pos.y, newPheromoneMap.depositAmount * depositMul * pheroBoost);
   }
 
   for (const enemy of newEnemies) {
@@ -621,14 +790,56 @@ export function simulateStep(
     enemy.pos.y = clamp(enemy.pos.y, 10, GRID_H * CELL - 10);
   }
 
-  const survivedBugs = newBugs.filter(b => {
+  const processedBugs: Bug[] = [];
+  for (let bi = 0; bi < newBugs.length; bi++) {
+    let b = newBugs[bi];
     if (b.hp <= 0) {
+      const hasNoDrop = getBugAbilityValue(b, mutationsMap, 'no_drop') > 0;
+      if (!hasNoDrop && b.carrying > 0) {
+        // 可以实现资源掉落在地上，这里简化为直接损失
+      }
       ctxWrap.onBugDied?.(b);
       addParticle(newParticles, pid, b.pos, '#34d399', 3, 8);
-      return false;
+      continue;
     }
-    return true;
-  });
+
+    const expEntries = bugExpDeltas.get(b.id);
+    if (expEntries) {
+      let totalExp = 0;
+      for (const e of expEntries) {
+        totalExp += e.amount;
+        ctxWrap.onBugExp?.(b.id, e.amount, e.source);
+      }
+      const expResult = addExpToBug(b, totalExp);
+      b = expResult.bug;
+      if (expResult.leveledUp) {
+        ctxWrap.onBugLevelUp?.(b.id, b.level);
+        addParticle(newParticles, pid, b.pos, '#fde047', 4, 12);
+      }
+    }
+
+    if (b.mutationReady) {
+      const existingMutationIds = b.mutations;
+      const existingMutationTypes: MutationType[] = [];
+      for (const mid of existingMutationIds) {
+        const m = mutationsMap.get(mid);
+        if (m) existingMutationTypes.push(m.type);
+      }
+      if (Math.random() < 0.7) {
+        const mutation = selectRandomMutation(existingMutationTypes);
+        b = applyMutationStats(b, mutation);
+        b.mutationReady = false;
+        pendingMutations.push({ bugId: b.id, mutation, tick: state.tick });
+        ctxWrap.onBugMutation?.(b.id, mutation);
+        addParticle(newParticles, pid, b.pos, mutation.color, 5, 15);
+      } else {
+        b.mutationReady = false;
+      }
+    }
+
+    processedBugs.push(b);
+  }
+  const survivedBugs = processedBugs;
 
   const survivedEnemies = newEnemies.filter(e => e.hp > 0);
   const aliveResources = newResources.filter(r => r.amount > 0);
@@ -643,6 +854,31 @@ export function simulateStep(
   const aliveParticles = newParticles.filter(p => p.life > 0);
 
   decayPheromones(newPheromoneMap);
+
+  const newEvolution = { ...evolution };
+  newEvolution.totalExp += deltaExpTotal.v;
+  const newEvoLevel = calcSwarmEvolutionLevel(newEvolution.totalExp);
+  if (newEvoLevel > evolution.evolutionLevel) {
+    newEvolution.evolutionLevel = newEvoLevel;
+    newEvolution.evolutionPoints += (newEvoLevel - evolution.evolutionLevel) * 3;
+    ctxWrap.onSwarmEvolution?.(newEvoLevel, newEvolution.totalExp);
+    addParticle(newParticles, pid, nestPos, '#a855f7', 6, 20);
+  }
+  for (const pm of pendingMutations) {
+    if (pm.tick === state.tick) {
+      newEvolution.totalMutations++;
+      if (pm.mutation.rarity === 'legendary') newEvolution.legendaryMutations++;
+      if (!newEvolution.unlockedMutations.includes(pm.mutation.id)) {
+        newEvolution.unlockedMutations.push(pm.mutation.id);
+      }
+      newEvolution.mutationHistory.push({
+        tick: pm.tick,
+        bugId: pm.bugId,
+        mutation: pm.mutation,
+      });
+    }
+  }
+  const activePendingMutations = pendingMutations.filter(pm => state.tick - pm.tick < 600);
 
   return {
     ...state,
@@ -659,6 +895,8 @@ export function simulateStep(
     totalCrystalGained: state.totalCrystalGained + deltaCrystal.v,
     enemiesKilled: state.enemiesKilled + deltaKills.v,
     resourcesCollected: state.resourcesCollected + deltaCollected.v,
+    evolution: newEvolution,
+    pendingMutations: activePendingMutations,
   };
 }
 
@@ -776,6 +1014,8 @@ export function createInitialState(level: number): GameState {
     pheromoneMap: createPheromoneMap(),
     squads,
     currentSquadId: 'squad-default',
+    evolution: createSwarmEvolution(),
+    pendingMutations: [],
   };
 }
 

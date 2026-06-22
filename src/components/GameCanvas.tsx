@@ -1,7 +1,8 @@
 import { useEffect, useRef } from 'react';
 import { useGameStore } from '@/store/gameStore';
 import { GRID_CONSTANTS } from '@/game/engine';
-import type { TerrainType, Bug, Enemy, ResourceNode, GameState, PheromoneMap, Squad } from '@/game/types';
+import type { TerrainType, Bug, Enemy, ResourceNode, GameState, PheromoneMap, Mutation } from '@/game/types';
+import { MUTATION_LIBRARY, RARITY_LABEL } from '@/game/types';
 
 const { GRID_W, GRID_H, CELL } = GRID_CONSTANTS;
 const CANVAS_W = GRID_W * CELL;
@@ -381,14 +382,39 @@ function drawBug(ctx: CanvasRenderingContext2D, bug: Bug, tick: number, squadCol
   const angle = Math.atan2(bug.vel.vy, bug.vel.vx);
   const wobble = Math.sin(tick * 0.3 + bug.id) * 0.1;
 
+  const size = bug.role === 'soldier' ? 4.5 : bug.role === 'scout' ? 2.8 : 3.5;
+
+  if (bug.mutations.length > 0) {
+    let highestRarity: Mutation['rarity'] = 'common';
+    for (const mid of bug.mutations) {
+      const m = Object.values(MUTATION_LIBRARY).find(mu => mu.id === mid);
+      if (m) {
+        const order: Mutation['rarity'][] = ['common', 'rare', 'epic', 'legendary'];
+        if (order.indexOf(m.rarity) > order.indexOf(highestRarity)) {
+          highestRarity = m.rarity;
+        }
+      }
+    }
+    const auraColor = RARITY_LABEL[highestRarity].color;
+    const auraPulse = 1 + Math.sin(tick * 0.08 + bug.id) * 0.12;
+    const auraSize = (size * 2.5 + bug.mutations.length * 0.8) * auraPulse;
+    ctx.save();
+    const grad = ctx.createRadialGradient(bug.pos.x, bug.pos.y, 0, bug.pos.x, bug.pos.y, auraSize);
+    grad.addColorStop(0, auraColor + '40');
+    grad.addColorStop(0.5, auraColor + '18');
+    grad.addColorStop(1, auraColor + '00');
+    ctx.fillStyle = grad;
+    safeArc(ctx, bug.pos.x, bug.pos.y, auraSize);
+    ctx.fill();
+    ctx.restore();
+  }
+
   ctx.save();
   ctx.translate(bug.pos.x, bug.pos.y);
   ctx.rotate(angle + wobble);
 
   ctx.shadowColor = squadColor + '80';
-  ctx.shadowBlur = 10;
-
-  const size = bug.role === 'soldier' ? 4.5 : bug.role === 'scout' ? 2.8 : 3.5;
+  ctx.shadowBlur = 10 + Math.min(bug.level * 0.8, 8);
 
   ctx.fillStyle = squadColor;
   ctx.beginPath();
@@ -429,6 +455,33 @@ function drawBug(ctx: CanvasRenderingContext2D, bug: Bug, tick: number, squadCol
     ctx.fillRect(bug.pos.x - w / 2, bug.pos.y - 8, w, 2);
     ctx.fillStyle = hpRatio > 0.5 ? '#34d399' : hpRatio > 0.25 ? '#fbbf24' : '#f87171';
     ctx.fillRect(bug.pos.x - w / 2, bug.pos.y - 8, w * hpRatio, 2);
+  }
+
+  if (bug.level > 1) {
+    const levelBadgeSize = Math.min(7, 3.5 + bug.level * 0.25);
+    ctx.fillStyle = 'rgba(253,224,71,0.95)';
+    ctx.strokeStyle = 'rgba(180,83,9,0.9)';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.arc(bug.pos.x + size * 1.6, bug.pos.y - size * 1.6, levelBadgeSize * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#78350f';
+    ctx.font = `${Math.max(5, Math.floor(levelBadgeSize * 0.8))}px monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(String(bug.level), bug.pos.x + size * 1.6, bug.pos.y - size * 1.6);
+    ctx.textAlign = 'start';
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  const expRatio = bug.exp / Math.max(1, bug.expToNext);
+  if (expRatio > 0 && bug.level < 20) {
+    const ew = 12;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(bug.pos.x - ew / 2, bug.pos.y + size + 3, ew, 1.5);
+    ctx.fillStyle = expRatio > 0.5 ? '#22d3ee' : '#a78bfa';
+    ctx.fillRect(bug.pos.x - ew / 2, bug.pos.y + size + 3, ew * expRatio, 1.5);
   }
 }
 

@@ -15,6 +15,8 @@ import {
   History,
   SkipBack,
   SkipForward,
+  Zap,
+  Crown,
 } from 'lucide-react';
 
 const EVENT_META: Record<EventType, {
@@ -88,6 +90,33 @@ const EVENT_META: Record<EventType, {
     bgColor: 'rgba(34, 211, 238, 0.15)',
     icon: <SkipForward size={11} />,
     format: (ev) => `切换至 ${ev.data.nextType as string} (剩余${ev.data.remaining as number})`,
+  },
+  bug_levelup: {
+    name: '虫升级',
+    color: '#fde047',
+    bgColor: 'rgba(253, 224, 71, 0.15)',
+    icon: <Zap size={11} />,
+    format: (ev) => `虫#${ev.data.bugId as number} 升至 Lv.${ev.data.level as number}`,
+  },
+  bug_mutation: {
+    name: '虫变异',
+    color: '#c084fc',
+    bgColor: 'rgba(192, 132, 252, 0.15)',
+    icon: <Sparkles size={11} />,
+    format: (ev) => {
+      const rarityLabel: Record<string, string> = {
+        common: '普通', rare: '稀有', epic: '史诗', legendary: '传说',
+      };
+      const r = ev.data.rarity as string;
+      return `虫#${ev.data.bugId as number} [${rarityLabel[r] ?? r}] ${ev.data.mutationName as string}`;
+    },
+  },
+  swarm_evolution: {
+    name: '群进化',
+    color: '#f59e0b',
+    bgColor: 'rgba(245, 158, 11, 0.15)',
+    icon: <Crown size={11} />,
+    format: (ev) => `虫群进化至 Lv.${ev.data.evolutionLevel as number} (总EXP${(ev.data.totalExp as number).toLocaleString()})`,
   },
 };
 

@@ -6,6 +6,7 @@ import ControlPanel from '@/components/ControlPanel';
 import InfoPanel from '@/components/InfoPanel';
 import EventTimeline from '@/components/EventTimeline';
 import SquadManager from '@/components/SquadManager';
+import EvolutionPanel from '@/components/EvolutionPanel';
 
 export default function Home() {
   const spawnInitialSwarm = useGameStore((s) => s.spawnInitialSwarm);
@@ -74,7 +75,7 @@ export default function Home() {
           <ControlPanel />
         </div>
 
-        <div className="grid grid-cols-[260px_1fr_300px_320px] gap-3" style={{ height: 'calc(100vh - 150px)' }}>
+        <div className="grid grid-cols-[260px_1fr_280px_300px_280px] gap-3" style={{ height: 'calc(100vh - 150px)' }}>
           <aside className="min-h-0">
             <InstructionEditor />
           </aside>
@@ -94,6 +95,9 @@ export default function Home() {
           <aside className="min-h-0">
             <EventTimeline />
           </aside>
+          <aside className="min-h-0">
+            <EvolutionPanel />
+          </aside>
         </div>
 
         <footer className="mt-3 flex items-center justify-between text-[10px] font-mono text-white/20 tracking-wider">
@@ -103,9 +107,9 @@ export default function Home() {
             FRAME: {String(useGameStore.getState().state.tick).padStart(6, '0')}
           </span>
           <span className="tracking-[0.2em]">
-            THE HIVE THINK AS ONE · 蜂群即思想 · 个体即细胞
+            THE HIVE THINK AS ONE · 蜂群即思想 · 个体即细胞 · EVOLUTION Lv.{useGameStore.getState().state.evolution.evolutionLevel}
           </span>
-          <span>v1.1.0-REWIND ╱ BUILD_{String(Date.now()).slice(-6)}</span>
+          <span>v1.2.0-EVOLUTION ╱ BUILD_{String(Date.now()).slice(-6)}</span>
         </footer>
       </div>
     </div>

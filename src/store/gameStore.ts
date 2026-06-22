@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { GameStore, Instruction, InstructionType, InstructionPreset, Squad } from '../game/types';
-import type { Bug, Enemy, PheromoneMap } from '../game/types';
+import type { Bug, Enemy, PheromoneMap, Mutation } from '../game/types';
 import {
   createInitialState,
   simulateStep,
@@ -79,7 +79,7 @@ export const useGameStore = create<GameStore>((set, get) => ({
     const emptyMap: PheromoneMap = {
       ...state.pheromoneMap,
       cells: state.pheromoneMap.cells.map(row =>
-        row.map(cell => ({ strength: 0, age: 0 }))
+        row.map(() => ({ strength: 0, age: 0 }))
       ),
     };
     set({ state: { ...state, pheromoneMap: emptyMap } });
@@ -120,7 +120,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     let newState = { ...state };
     const newSquads = newState.squads.map(s => ({ ...s, instructions: [...s.instructions] }));
-    let anySwitched = false;
 
     for (const squad of newSquads) {
       const squadInst = squad.instructions;
@@ -131,7 +130,6 @@ export const useGameStore = create<GameStore>((set, get) => ({
         squad.instructionTimer--;
         if (squad.instructionTimer <= 0) {
           squadInst.shift();
-          anySwitched = true;
           if (squadInst.length > 0) {
             eventRecorder.recordEvent('instruction_switch', {
               squadId: squad.id,
@@ -166,32 +164,36 @@ export const useGameStore = create<GameStore>((set, get) => ({
     newState = simulateStep(newState, {
       instructions: currentInstructions,
       squads: newSquads,
-      onFoodGained: (n, pos) => {
+      onFoodGained: (n, pos, bugId) => {
         eventRecorder.recordEvent('food_deposited', {
           amount: n,
           pos,
+          bugId,
         });
       },
-      onCrystalGained: (n, pos) => {
+      onCrystalGained: (n, pos, bugId) => {
         eventRecorder.recordEvent('crystal_deposited', {
           amount: n,
           pos,
+          bugId,
         });
       },
-      onEnemyKilled: (enemy: Enemy) => {
+      onEnemyKilled: (enemy: Enemy, killerBugId) => {
         eventRecorder.recordEvent('enemy_killed', {
           enemyId: enemy.id,
           type: enemy.type,
           hp: enemy.maxHp,
           pos: { ...enemy.pos },
+          killerBugId,
         });
       },
-      onResourceCollected: (rid, amt, type, pos) => {
+      onResourceCollected: (rid, amt, type, pos, bugId) => {
         eventRecorder.recordEvent('resource_collected', {
           resourceId: rid,
           amount: amt,
           resourceType: type,
           pos,
+          bugId,
         });
       },
       onBugDied: (bug: Bug) => {
@@ -201,6 +203,8 @@ export const useGameStore = create<GameStore>((set, get) => ({
           squadId: bug.squadId,
           age: bug.age,
           pos: { ...bug.pos },
+          level: bug.level,
+          mutations: bug.mutations,
         });
       },
       onBugBorn: (bug: Bug) => {
@@ -209,6 +213,33 @@ export const useGameStore = create<GameStore>((set, get) => ({
           role: bug.role,
           squadId: bug.squadId,
           pos: { ...bug.pos },
+        });
+      },
+      onBugExp: () => {
+        // 可以选择性记录，避免事件过多
+      },
+      onBugLevelUp: (bugId, level) => {
+        eventRecorder.recordEvent('bug_levelup', {
+          bugId,
+          level,
+        });
+      },
+      onBugMutation: (bugId, mutation: Mutation) => {
+        eventRecorder.recordEvent('bug_mutation', {
+          bugId,
+          mutationId: mutation.id,
+          mutationName: mutation.name,
+          mutationType: mutation.type,
+          rarity: mutation.rarity,
+          ability: mutation.ability,
+          value: mutation.value,
+          description: mutation.description,
+        });
+      },
+      onSwarmEvolution: (newLevel, totalExp) => {
+        eventRecorder.recordEvent('swarm_evolution', {
+          evolutionLevel: newLevel,
+          totalExp,
         });
       },
     });

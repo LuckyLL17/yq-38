@@ -1,10 +1,10 @@
 import { useGameStore } from '@/store/gameStore';
-import { Bug, Skull, Leaf, Gem, Target, TrendingUp } from 'lucide-react';
-import { INSTRUCTION_META } from '@/game/types';
+import { Bug, Skull, Leaf, Gem, Target, TrendingUp, Sparkles, Zap } from 'lucide-react';
+import { INSTRUCTION_META, MUTATION_LIBRARY, RARITY_LABEL } from '@/game/types';
 
 export default function InfoPanel() {
   const { state } = useGameStore();
-  const { bugs, levelObjective, levelProgress, levelTarget, totalFood, totalCrystal, enemiesKilled, resources, squads } = state;
+  const { bugs, levelObjective, levelProgress, levelTarget, totalFood, totalCrystal, enemiesKilled, resources, squads, evolution } = state;
 
   const roles = {
     worker: bugs.filter((b) => b.role === 'worker').length,
@@ -50,6 +50,8 @@ export default function InfoPanel() {
             <span className="text-cyan-400/70">{progress.toFixed(0)}%</span>
           </div>
         </div>
+
+        <EvolutionCard evolution={evolution} bugs={bugs} />
 
         <div className="grid grid-cols-2 gap-2">
           <StatCard icon={<Bug size={13} />} label="虫群规模" value={bugs.length} sub={`工${roles.worker}·兵${roles.soldier}·侦${roles.scout}`} color="#34d399" />
@@ -189,6 +191,117 @@ function TerrainRow({
       <div className="flex-1 flex gap-2 font-mono text-[10px]">
         <span className="text-cyan-400/70">移{speed}</span>
         <span className="text-rose-400/70">攻{atk}</span>
+      </div>
+    </div>
+  );
+}
+
+function EvolutionCard({
+  evolution,
+  bugs,
+}: {
+  evolution: import('@/game/types').SwarmEvolution;
+  bugs: import('@/game/types').Bug[];
+}) {
+  const evoThresholds = [0, 500, 1500, 4000, 10000, 25000, 60000, 150000, 400000];
+  const curMin = evoThresholds[evolution.evolutionLevel - 1] ?? 0;
+  const curMax = evoThresholds[evolution.evolutionLevel] ?? 400000;
+  const progressInLevel = Math.min(100, ((evolution.totalExp - curMin) / Math.max(1, curMax - curMin)) * 100);
+
+  const avgLevel = bugs.length > 0
+    ? (bugs.reduce((s, b) => s + b.level, 0) / bugs.length).toFixed(1)
+    : '0.0';
+  const maxLevel = bugs.length > 0 ? Math.max(...bugs.map(b => b.level)) : 0;
+  const mutatedBugs = bugs.filter(b => b.mutations.length > 0).length;
+  const totalMutationCount = bugs.reduce((s, b) => s + b.mutations.length, 0);
+
+  const rarityStats = { common: 0, rare: 0, epic: 0, legendary: 0 };
+  for (const b of bugs) {
+    for (const mid of b.mutations) {
+      const m = Object.values(MUTATION_LIBRARY).find(mu => mu.id === mid);
+      if (m) rarityStats[m.rarity]++;
+    }
+  }
+
+  return (
+    <div className="p-3 rounded-lg border border-fuchsia-500/25 bg-gradient-to-br from-fuchsia-500/10 via-purple-500/5 to-transparent">
+      <div className="flex items-center gap-2 mb-2.5">
+        <Sparkles size={14} className="text-fuchsia-400" />
+        <span className="text-xs font-bold text-fuchsia-400 tracking-wider">虫群进化</span>
+        <span className="ml-auto px-2 py-0.5 rounded bg-fuchsia-500/20 text-[10px] font-mono font-bold text-fuchsia-300 border border-fuchsia-500/30">
+          Lv.{evolution.evolutionLevel}
+        </span>
+      </div>
+
+      <div className="mb-2.5">
+        <div className="relative h-2 rounded-full bg-black/50 border border-fuchsia-500/20 overflow-hidden">
+          <div
+            className="absolute inset-y-0 left-0 rounded-full transition-all duration-500"
+            style={{
+              width: `${progressInLevel}%`,
+              background: 'linear-gradient(90deg, #a855f7, #ec4899, #f59e0b)',
+              boxShadow: '0 0 8px rgba(168,85,247,0.6)',
+            }}
+          />
+        </div>
+        <div className="flex justify-between mt-1 text-[9px] font-mono">
+          <span className="text-fuchsia-400/60">总经验 {evolution.totalExp.toLocaleString()}</span>
+          <span className="text-pink-400/60">{progressInLevel.toFixed(0)}%</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5 mb-2.5">
+        <MiniStat label="平均Lv" value={avgLevel} color="#fde047" />
+        <MiniStat label="最高Lv" value={String(maxLevel)} color="#fb923c" />
+        <MiniStat label="变异体" value={`${mutatedBugs}`} color="#c084fc" />
+      </div>
+
+      {totalMutationCount > 0 && (
+        <div className="pt-2 border-t border-fuchsia-500/15">
+          <div className="text-[9px] text-fuchsia-400/60 mb-1.5 font-bold tracking-wider flex items-center gap-1">
+            <Zap size={10} /> 变异分布 · {totalMutationCount}
+          </div>
+          <div className="flex gap-1">
+            {(['common', 'rare', 'epic', 'legendary'] as const).map(r => {
+              const info = RARITY_LABEL[r];
+              const count = rarityStats[r];
+              const pct = totalMutationCount > 0 ? (count / totalMutationCount) * 100 : 0;
+              return (
+                <div key={r} className="flex-1 flex flex-col items-center" title={`${info.label}: ${count}`}>
+                  <div className="w-full h-1.5 rounded-full bg-black/40 overflow-hidden mb-0.5">
+                    <div
+                      className="h-full rounded-full transition-all"
+                      style={{ width: `${pct}%`, backgroundColor: info.color }}
+                    />
+                  </div>
+                  <span className="text-[8px] font-mono" style={{ color: info.color + '90' }}>
+                    {count}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {evolution.legendaryMutations > 0 && (
+        <div className="mt-2 pt-2 border-t border-amber-500/20 flex items-center gap-1.5">
+          <span className="text-amber-400 animate-pulse">✦</span>
+          <span className="text-[9px] text-amber-400/80 font-bold tracking-wider">
+            传说变异 x{evolution.legendaryMutations}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MiniStat({ label, value, color }: { label: string; value: string; color: string }) {
+  return (
+    <div className="p-1.5 rounded bg-black/30 border border-white/5 text-center">
+      <div className="text-[8px] text-white/40 mb-0.5 tracking-wider">{label}</div>
+      <div className="text-sm font-black font-mono leading-none" style={{ color, textShadow: `0 0 6px ${color}50` }}>
+        {value}
       </div>
     </div>
   );

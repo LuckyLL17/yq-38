@@ -19,6 +19,47 @@ export interface Velocity {
   vy: number;
 }
 
+export type MutationType =
+  | 'strong_jaws'
+  | 'thick_shell'
+  | 'swift_legs'
+  | 'efficient_digestive'
+  | 'poison_sting'
+  | 'compound_eyes'
+  | 'pheromone_trail'
+  | 'regenerative'
+  | 'group_tactics'
+  | 'resource_sense'
+  | 'winged_glide'
+  | 'iron_grip';
+
+export type AbilityType =
+  | 'damage_boost'
+  | 'hp_boost'
+  | 'speed_boost'
+  | 'carry_boost'
+  | 'attack_poison'
+  | 'vision_range'
+  | 'pheromone_strength'
+  | 'hp_regen'
+  | 'swarm_damage'
+  | 'resource_detect'
+  | 'glide_terrain'
+  | 'no_drop';
+
+export interface Mutation {
+  id: string;
+  type: MutationType;
+  name: string;
+  description: string;
+  ability: AbilityType;
+  value: number;
+  rarity: 'common' | 'rare' | 'epic' | 'legendary';
+  icon: string;
+  color: string;
+  bgColor: string;
+}
+
 export interface Bug {
   id: number;
   pos: Position;
@@ -35,6 +76,21 @@ export interface Bug {
   cooldown: number;
   wanderAngle: number;
   age: number;
+  exp: number;
+  level: number;
+  mutations: string[];
+  expToNext: number;
+  mutationReady: boolean;
+}
+
+export interface SwarmEvolution {
+  totalExp: number;
+  evolutionLevel: number;
+  evolutionPoints: number;
+  unlockedMutations: string[];
+  mutationHistory: Array<{ tick: number; bugId: number; mutation: Mutation }>;
+  totalMutations: number;
+  legendaryMutations: number;
 }
 
 export interface Enemy {
@@ -123,6 +179,8 @@ export interface GameState {
   pheromoneMap: PheromoneMap;
   squads: Squad[];
   currentSquadId: string;
+  evolution: SwarmEvolution;
+  pendingMutations: Array<{ bugId: number; mutation: Mutation; tick: number }>;
 }
 
 export interface InstructionPreset {
@@ -141,7 +199,10 @@ export type EventType =
   | 'crystal_deposited'
   | 'resource_collected'
   | 'bug_born'
-  | 'instruction_switch';
+  | 'instruction_switch'
+  | 'bug_levelup'
+  | 'bug_mutation'
+  | 'swarm_evolution';
 
 export interface GameEvent {
   id: number;
@@ -337,3 +398,179 @@ export const INSTRUCTION_META: Record<InstructionType, {
     durationLabel: '执行时长(tick)',
   },
 };
+
+export const MUTATION_LIBRARY: Record<MutationType, Mutation> = {
+  strong_jaws: {
+    id: 'strong_jaws',
+    type: 'strong_jaws',
+    name: '强化颚',
+    description: '攻击伤害提升',
+    ability: 'damage_boost',
+    value: 0.25,
+    rarity: 'common',
+    icon: '𓆦',
+    color: '#f87171',
+    bgColor: 'rgba(248, 113, 113, 0.15)',
+  },
+  thick_shell: {
+    id: 'thick_shell',
+    type: 'thick_shell',
+    name: '厚甲壳',
+    description: '最大生命值提升',
+    ability: 'hp_boost',
+    value: 0.3,
+    rarity: 'common',
+    icon: '⬢',
+    color: '#60a5fa',
+    bgColor: 'rgba(96, 165, 250, 0.15)',
+  },
+  swift_legs: {
+    id: 'swift_legs',
+    type: 'swift_legs',
+    name: '疾速足',
+    description: '移动速度提升',
+    ability: 'speed_boost',
+    value: 0.2,
+    rarity: 'common',
+    icon: '»',
+    color: '#22d3ee',
+    bgColor: 'rgba(34, 211, 238, 0.15)',
+  },
+  efficient_digestive: {
+    id: 'efficient_digestive',
+    type: 'efficient_digestive',
+    name: '高效消化',
+    description: '携带容量提升',
+    ability: 'carry_boost',
+    value: 0.5,
+    rarity: 'common',
+    icon: '◈',
+    color: '#fbbf24',
+    bgColor: 'rgba(251, 191, 36, 0.15)',
+  },
+  poison_sting: {
+    id: 'poison_sting',
+    type: 'poison_sting',
+    name: '毒刺',
+    description: '攻击附带持续毒素伤害',
+    ability: 'attack_poison',
+    value: 0.15,
+    rarity: 'rare',
+    icon: '☠',
+    color: '#a78bfa',
+    bgColor: 'rgba(167, 139, 250, 0.15)',
+  },
+  compound_eyes: {
+    id: 'compound_eyes',
+    type: 'compound_eyes',
+    name: '复眼',
+    description: '侦测范围扩大，优先找到目标',
+    ability: 'vision_range',
+    value: 1.5,
+    rarity: 'rare',
+    icon: '◉',
+    color: '#34d399',
+    bgColor: 'rgba(52, 211, 153, 0.15)',
+  },
+  pheromone_trail: {
+    id: 'pheromone_trail',
+    type: 'pheromone_trail',
+    name: '信息素强化',
+    description: '分泌更强的信息素，引导虫群',
+    ability: 'pheromone_strength',
+    value: 1.8,
+    rarity: 'rare',
+    icon: '≋',
+    color: '#c084fc',
+    bgColor: 'rgba(192, 132, 252, 0.15)',
+  },
+  regenerative: {
+    id: 'regenerative',
+    type: 'regenerative',
+    name: '再生组织',
+    description: '每秒缓慢恢复生命值',
+    ability: 'hp_regen',
+    value: 0.08,
+    rarity: 'rare',
+    icon: '✚',
+    color: '#4ade80',
+    bgColor: 'rgba(74, 222, 128, 0.15)',
+  },
+  group_tactics: {
+    id: 'group_tactics',
+    type: 'group_tactics',
+    name: '集群战术',
+    description: '周围同类越多伤害越高',
+    ability: 'swarm_damage',
+    value: 0.1,
+    rarity: 'epic',
+    icon: '◈',
+    color: '#f472b6',
+    bgColor: 'rgba(244, 114, 182, 0.15)',
+  },
+  resource_sense: {
+    id: 'resource_sense',
+    type: 'resource_sense',
+    name: '资源感知',
+    description: '能探测更远距离的资源',
+    ability: 'resource_detect',
+    value: 2.0,
+    rarity: 'epic',
+    icon: '◇',
+    color: '#facc15',
+    bgColor: 'rgba(250, 204, 21, 0.15)',
+  },
+  winged_glide: {
+    id: 'winged_glide',
+    type: 'winged_glide',
+    name: '膜翼滑翔',
+    description: '不受地形减速影响',
+    ability: 'glide_terrain',
+    value: 1,
+    rarity: 'epic',
+    icon: '⋈',
+    color: '#38bdf8',
+    bgColor: 'rgba(56, 189, 248, 0.15)',
+  },
+  iron_grip: {
+    id: 'iron_grip',
+    type: 'iron_grip',
+    name: '铁之握',
+    description: '死亡时不掉落携带资源',
+    ability: 'no_drop',
+    value: 1,
+    rarity: 'legendary',
+    icon: '⚙',
+    color: '#e879f9',
+    bgColor: 'rgba(232, 121, 249, 0.15)',
+  },
+};
+
+export const RARITY_WEIGHTS: Record<Mutation['rarity'], number> = {
+  common: 60,
+  rare: 28,
+  epic: 10,
+  legendary: 2,
+};
+
+export const RARITY_LABEL: Record<Mutation['rarity'], { label: string; color: string }> = {
+  common: { label: '普通', color: '#94a3b8' },
+  rare: { label: '稀有', color: '#38bdf8' },
+  epic: { label: '史诗', color: '#c084fc' },
+  legendary: { label: '传说', color: '#fbbf24' },
+};
+
+export function calcExpToNext(level: number): number {
+  return Math.floor(50 * Math.pow(1.35, level - 1));
+}
+
+export function getExpReward(action: 'collect' | 'kill' | 'deposit_food' | 'deposit_crystal' | 'survive' | 'heal'): number {
+  switch (action) {
+    case 'collect': return 3;
+    case 'kill': return 15;
+    case 'deposit_food': return 2;
+    case 'deposit_crystal': return 5;
+    case 'survive': return 1;
+    case 'heal': return 4;
+  }
+}
