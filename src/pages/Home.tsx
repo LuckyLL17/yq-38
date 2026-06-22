@@ -4,6 +4,7 @@ import GameCanvas from '@/components/GameCanvas';
 import InstructionEditor from '@/components/InstructionEditor';
 import ControlPanel from '@/components/ControlPanel';
 import InfoPanel from '@/components/InfoPanel';
+import EventTimeline from '@/components/EventTimeline';
 
 export default function Home() {
   const spawnInitialSwarm = useGameStore((s) => s.spawnInitialSwarm);
@@ -28,8 +29,8 @@ export default function Home() {
       <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-emerald-500/40 to-transparent pointer-events-none" />
       <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-fuchsia-500/30 to-transparent pointer-events-none" />
 
-      <div className="relative z-10 max-w-[1600px] mx-auto px-6 py-4">
-        <header className="mb-4">
+      <div className="relative z-10 max-w-[1920px] mx-auto px-4 py-3">
+        <header className="mb-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="relative">
@@ -68,11 +69,11 @@ export default function Home() {
           </div>
         </header>
 
-        <div className="mb-4">
+        <div className="mb-3">
           <ControlPanel />
         </div>
 
-        <div className="grid grid-cols-[280px_1fr_300px] gap-4" style={{ height: 'calc(100vh - 170px)' }}>
+        <div className="grid grid-cols-[260px_1fr_300px_320px] gap-3" style={{ height: 'calc(100vh - 150px)' }}>
           <aside className="min-h-0">
             <InstructionEditor />
           </aside>
@@ -84,9 +85,12 @@ export default function Home() {
           <aside className="min-h-0">
             <InfoPanel />
           </aside>
+          <aside className="min-h-0">
+            <EventTimeline />
+          </aside>
         </div>
 
-        <footer className="mt-4 flex items-center justify-between text-[10px] font-mono text-white/20 tracking-wider">
+        <footer className="mt-3 flex items-center justify-between text-[10px] font-mono text-white/20 tracking-wider">
           <span>
             ◈ INDIVIDUALS: {bugs.length} &nbsp;·&nbsp; INSTRUCTIONS:{' '}
             {useGameStore.getState().instructions.length} &nbsp;·&nbsp;
@@ -95,7 +99,7 @@ export default function Home() {
           <span className="tracking-[0.2em]">
             THE HIVE THINK AS ONE · 蜂群即思想 · 个体即细胞
           </span>
-          <span>v1.0.0 ╱ BUILD_{String(Date.now()).slice(-6)}</span>
+          <span>v1.1.0-REWIND ╱ BUILD_{String(Date.now()).slice(-6)}</span>
         </footer>
       </div>
     </div>

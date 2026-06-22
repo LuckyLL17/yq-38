@@ -201,11 +201,12 @@ function addParticle(
 
 export interface SimulationContext {
   instructions: Instruction[];
-  onFoodGained?: (n: number) => void;
-  onCrystalGained?: (n: number) => void;
-  onEnemyKilled?: () => void;
-  onResourceCollected?: () => void;
-  onBugDied?: () => void;
+  onFoodGained?: (n: number, pos: Position) => void;
+  onCrystalGained?: (n: number, pos: Position) => void;
+  onEnemyKilled?: (enemy: Enemy) => void;
+  onResourceCollected?: (resourceId: number, amount: number, type: 'food' | 'crystal', pos: Position) => void;
+  onBugDied?: (bug: Bug) => void;
+  onBugBorn?: (bug: Bug) => void;
 }
 
 export function simulateStep(
@@ -224,11 +225,12 @@ export function simulateStep(
   const deltaCollected = { v: 0 };
   const ctxWrap: SimulationContext = {
     instructions: ctx.instructions,
-    onFoodGained: (n) => { deltaFood.v += n; ctx.onFoodGained?.(n); },
-    onCrystalGained: (n) => { deltaCrystal.v += n; ctx.onCrystalGained?.(n); },
-    onEnemyKilled: () => { deltaKills.v += 1; ctx.onEnemyKilled?.(); },
-    onResourceCollected: () => { deltaCollected.v += 1; ctx.onResourceCollected?.(); },
-    onBugDied: ctx.onBugDied,
+    onFoodGained: (n, pos) => { deltaFood.v += n; ctx.onFoodGained?.(n, pos); },
+    onCrystalGained: (n, pos) => { deltaCrystal.v += n; ctx.onCrystalGained?.(n, pos); },
+    onEnemyKilled: (enemy) => { deltaKills.v += 1; ctx.onEnemyKilled?.(enemy); },
+    onResourceCollected: (rid, amt, type, pos) => { deltaCollected.v += 1; ctx.onResourceCollected?.(rid, amt, type, pos); },
+    onBugDied: (bug) => { ctx.onBugDied?.(bug); },
+    onBugBorn: ctx.onBugBorn,
   };
 
   const newBugs = state.bugs.map(b => ({ ...b, vel: { ...b.vel }, pos: { ...b.pos } }));
@@ -310,10 +312,10 @@ export function simulateStep(
                 if (bug.carrying > 0) {
                   const nearest = nearestRes;
                   if (nearest && nearest.type === 'crystal') {
-                    ctxWrap.onCrystalGained?.(bug.carrying);
+                    ctxWrap.onCrystalGained?.(bug.carrying, { ...bug.pos });
                     addParticle(newParticles, pid, bug.pos, '#a78bfa', 3, 5);
                   } else {
-                    ctxWrap.onFoodGained?.(bug.carrying);
+                    ctxWrap.onFoodGained?.(bug.carrying, { ...bug.pos });
                     addParticle(newParticles, pid, bug.pos, '#fbbf24', 3, 5);
                   }
                   bug.carrying = 0;
@@ -329,7 +331,7 @@ export function simulateStep(
                 const take = Math.min(bug.carryCapacity - bug.carrying, 3, nearestRes.amount);
                 bug.carrying += take;
                 nearestRes.amount -= take;
-                ctxWrap.onResourceCollected?.();
+                ctxWrap.onResourceCollected?.(nearestRes.id, take, nearestRes.type, { ...nearestRes.pos });
                 bug.cooldown = 10;
                 addParticle(newParticles, pid, nearestRes.pos,
                   nearestRes.type === 'crystal' ? '#a78bfa' : '#fbbf24', 2, 2);
@@ -367,7 +369,7 @@ export function simulateStep(
                 bug.cooldown = 18;
                 addParticle(newParticles, pid, nearestEnemy.pos, '#f87171', 3, 3);
                 if (nearestEnemy.hp <= 0) {
-                  ctxWrap.onEnemyKilled?.();
+                  ctxWrap.onEnemyKilled?.(nearestEnemy);
                   addParticle(newParticles, pid, nearestEnemy.pos, '#ef4444', 4, 10);
                 }
               }
@@ -516,7 +518,7 @@ export function simulateStep(
 
   const survivedBugs = newBugs.filter(b => {
     if (b.hp <= 0) {
-      ctxWrap.onBugDied?.();
+      ctxWrap.onBugDied?.(b);
       addParticle(newParticles, pid, b.pos, '#34d399', 3, 8);
       return false;
     }
@@ -555,7 +557,8 @@ export function simulateStep(
 export function tryReproduce(
   state: GameState,
   cost: number,
-  addBug: (bug: Bug) => void
+  addBug: (bug: Bug) => void,
+  onBugBorn?: (bug: Bug) => void
 ): GameState {
   if (state.totalFood >= cost) {
     const roleRoll = Math.random();
@@ -563,6 +566,7 @@ export function tryReproduce(
     const id = (state.bugs[state.bugs.length - 1]?.id ?? 0) + 1;
     const bug = createBug(id, state.nestPos, role);
     addBug(bug);
+    onBugBorn?.(bug);
     return { ...state, totalFood: state.totalFood - cost };
   }
   return state;

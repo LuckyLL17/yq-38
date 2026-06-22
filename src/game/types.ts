@@ -106,10 +106,56 @@ export interface InstructionPreset {
   updatedAt: number;
 }
 
+export type EventType =
+  | 'bug_death'
+  | 'enemy_killed'
+  | 'food_deposited'
+  | 'crystal_deposited'
+  | 'resource_collected'
+  | 'bug_born'
+  | 'instruction_switch';
+
+export interface GameEvent {
+  id: number;
+  type: EventType;
+  tick: number;
+  timestamp: number;
+  data: Record<string, unknown>;
+}
+
+export interface StateSnapshot {
+  tick: number;
+  state: GameState;
+  instructions: Instruction[];
+}
+
+export interface EventHistory {
+  events: GameEvent[];
+  snapshots: StateSnapshot[];
+  currentTick: number;
+  isRewinding: boolean;
+  rewindTick: number | null;
+}
+
+export interface EventRecorderAPI {
+  history: EventHistory;
+  recordEvent: (type: EventType, data: Record<string, unknown>) => void;
+  takeSnapshot: (state: GameState, instructions: Instruction[]) => void;
+  seekToTick: (targetTick: number) => { state: GameState; instructions: Instruction[] } | null;
+  stepForward: () => { state: GameState; instructions: Instruction[] } | null;
+  stepBackward: () => { state: GameState; instructions: Instruction[] } | null;
+  getEventsInRange: (startTick: number, endTick: number) => GameEvent[];
+  enterRewindMode: () => void;
+  exitRewindMode: () => void;
+  clear: () => void;
+  getLatestTick: () => number;
+}
+
 export interface GameStore {
   state: GameState;
   instructions: Instruction[];
   presets: InstructionPreset[];
+  eventRecorder: EventRecorderAPI;
   setState: (state: Partial<GameState>) => void;
   setInstructions: (instructions: Instruction[]) => void;
   addInstruction: (type: InstructionType, index?: number) => void;
@@ -129,6 +175,10 @@ export interface GameStore {
   exportPreset: (id: string) => string;
   importPreset: (data: string) => InstructionPreset | null;
   pastePresetFromClipboard: (text: string) => InstructionPreset | null;
+  seekToTick: (tick: number) => void;
+  stepBackward: () => void;
+  stepForward: () => void;
+  toggleRewindMode: () => void;
 }
 
 export const INSTRUCTION_META: Record<InstructionType, {

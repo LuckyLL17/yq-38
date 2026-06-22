@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { GameStore, Instruction, InstructionType, InstructionPreset } from '../game/types';
+import type { Bug, Enemy } from '../game/types';
 import {
   createInitialState,
   simulateStep,
@@ -7,8 +8,9 @@ import {
   createBug,
   updateLevelProgress,
 } from '../game/engine';
-import type { Bug } from '../game/types';
 import { INSTRUCTION_META } from '../game/types';
+import { createEventRecorder } from '../game/eventRecorder';
+import type { EventRecorderAPI } from '../game/types';
 
 let bugIdCounter = 1000;
 
@@ -56,10 +58,13 @@ function regenerateInstructionIds(instructions: Instruction[]): Instruction[] {
   }));
 }
 
+const eventRecorderInstance: EventRecorderAPI = createEventRecorder();
+
 export const useGameStore = create<GameStore>((set, get) => ({
   state: createInitialState(1),
   instructions: [],
   presets: loadPresetsFromStorage(),
+  eventRecorder: eventRecorderInstance,
 
   setState: (partial) => set((s) => ({ state: { ...s.state, ...partial } })),
 
@@ -115,11 +120,13 @@ export const useGameStore = create<GameStore>((set, get) => ({
   setSpeed: (speed) => set((s) => ({ state: { ...s.state, speed } })),
 
   step: () => {
-    const { state, instructions } = get();
+    const { state, instructions, eventRecorder } = get();
     if (state.paused) return;
+    if (eventRecorder.history.isRewinding) return;
 
     let newState = { ...state };
-    let workingInstructions = [...instructions];
+    const workingInstructions = [...instructions];
+    let instructionSwitched = false;
 
     if (workingInstructions.length > 0) {
       if (newState.instructionTimer <= 0) {
@@ -128,7 +135,15 @@ export const useGameStore = create<GameStore>((set, get) => ({
       newState.instructionTimer--;
       if (newState.instructionTimer <= 0) {
         workingInstructions.shift();
+        instructionSwitched = true;
       }
+    }
+
+    if (instructionSwitched && workingInstructions.length > 0) {
+      eventRecorder.recordEvent('instruction_switch', {
+        nextType: workingInstructions[0].type,
+        remaining: workingInstructions.length,
+      });
     }
 
     const reproduceCost = workingInstructions
@@ -141,11 +156,49 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     newState = simulateStep(newState, {
       instructions: workingInstructions,
-      onFoodGained: () => {},
-      onCrystalGained: () => {},
-      onEnemyKilled: () => {},
-      onResourceCollected: () => {},
-      onBugDied: () => {},
+      onFoodGained: (n, pos) => {
+        eventRecorder.recordEvent('food_deposited', {
+          amount: n,
+          pos,
+        });
+      },
+      onCrystalGained: (n, pos) => {
+        eventRecorder.recordEvent('crystal_deposited', {
+          amount: n,
+          pos,
+        });
+      },
+      onEnemyKilled: (enemy: Enemy) => {
+        eventRecorder.recordEvent('enemy_killed', {
+          enemyId: enemy.id,
+          type: enemy.type,
+          hp: enemy.maxHp,
+          pos: { ...enemy.pos },
+        });
+      },
+      onResourceCollected: (rid, amt, type, pos) => {
+        eventRecorder.recordEvent('resource_collected', {
+          resourceId: rid,
+          amount: amt,
+          resourceType: type,
+          pos,
+        });
+      },
+      onBugDied: (bug: Bug) => {
+        eventRecorder.recordEvent('bug_death', {
+          bugId: bug.id,
+          role: bug.role,
+          age: bug.age,
+          pos: { ...bug.pos },
+        });
+      },
+      onBugBorn: (bug: Bug) => {
+        eventRecorder.recordEvent('bug_born', {
+          bugId: bug.id,
+          role: bug.role,
+          pos: { ...bug.pos },
+        });
+      },
     });
 
     if (
@@ -156,6 +209,12 @@ export const useGameStore = create<GameStore>((set, get) => ({
       newState = tryReproduce(newState, avgCost, (bug) => {
         bug.id = ++bugIdCounter;
         addBugQueue.push(bug);
+      }, (bug) => {
+        eventRecorder.recordEvent('bug_born', {
+          bugId: bug.id,
+          role: bug.role,
+          pos: { ...bug.pos },
+        });
       });
     }
 
@@ -165,22 +224,36 @@ export const useGameStore = create<GameStore>((set, get) => ({
 
     newState = updateLevelProgress(newState);
     set({ state: newState, instructions: workingInstructions });
+
+    eventRecorder.takeSnapshot(newState, workingInstructions);
   },
 
   resetLevel: () => {
     bugIdCounter = 1000;
     const s = get();
     const level = s.state.level;
-    set({ state: createInitialState(level), instructions: [] });
-    setTimeout(() => get().spawnInitialSwarm(), 0);
+    const newState = createInitialState(level);
+    s.eventRecorder.clear();
+    set({ state: newState, instructions: [] });
+    setTimeout(() => {
+      get().spawnInitialSwarm();
+      const afterSpawn = get();
+      afterSpawn.eventRecorder.takeSnapshot(afterSpawn.state, afterSpawn.instructions);
+    }, 0);
   },
 
   nextLevel: () => {
     bugIdCounter = 1000;
     const s = get();
     const nextLv = s.state.level + 1;
-    set({ state: createInitialState(nextLv) });
-    setTimeout(() => get().spawnInitialSwarm(), 0);
+    const newState = createInitialState(nextLv);
+    s.eventRecorder.clear();
+    set({ state: newState });
+    setTimeout(() => {
+      get().spawnInitialSwarm();
+      const afterSpawn = get();
+      afterSpawn.eventRecorder.takeSnapshot(afterSpawn.state, afterSpawn.instructions);
+    }, 0);
   },
 
   spawnInitialSwarm: () => {
@@ -379,6 +452,47 @@ export const useGameStore = create<GameStore>((set, get) => ({
       // not valid JSON, try direct import format
     }
     return get().importPreset(trimmed);
+  },
+
+  seekToTick: (tick: number) => {
+    const { eventRecorder } = get();
+    if (!eventRecorder.history.isRewinding) {
+      eventRecorder.enterRewindMode();
+    }
+    const result = eventRecorder.seekToTick(tick);
+    if (result) {
+      set({ state: result.state, instructions: result.instructions });
+    }
+  },
+
+  stepBackward: () => {
+    const { eventRecorder } = get();
+    if (!eventRecorder.history.isRewinding) {
+      eventRecorder.enterRewindMode();
+    }
+    const result = eventRecorder.stepBackward();
+    if (result) {
+      set({ state: result.state, instructions: result.instructions });
+    }
+  },
+
+  stepForward: () => {
+    const { eventRecorder } = get();
+    const result = eventRecorder.stepForward();
+    if (result) {
+      set({ state: result.state, instructions: result.instructions });
+    }
+  },
+
+  toggleRewindMode: () => {
+    const { eventRecorder, setState } = get();
+    if (eventRecorder.history.isRewinding) {
+      eventRecorder.exitRewindMode();
+      setState({ paused: true });
+    } else {
+      eventRecorder.enterRewindMode();
+      setState({ paused: true });
+    }
   },
 }));
 

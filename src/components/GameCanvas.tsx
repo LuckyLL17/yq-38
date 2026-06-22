@@ -44,12 +44,18 @@ export default function GameCanvas() {
   const stateRef = useRef<GameState>(useGameStore.getState().state);
   const pausedRef = useRef(false);
   const levelCompleteRef = useRef(false);
+  const isRewindingRef = useRef(false);
+  const rewindTickRef = useRef<number | null>(null);
+  const latestTickRef = useRef(0);
 
   useEffect(() => {
     const unsub = useGameStore.subscribe((s) => {
       stateRef.current = s.state;
       pausedRef.current = s.state.paused;
       levelCompleteRef.current = s.state.levelComplete;
+      isRewindingRef.current = s.eventRecorder.history.isRewinding;
+      rewindTickRef.current = s.eventRecorder.history.rewindTick;
+      latestTickRef.current = s.eventRecorder.history.currentTick;
     });
     return unsub;
   }, []);
@@ -180,7 +186,7 @@ export default function GameCanvas() {
 
       const spd = stateRef.current.speed;
       const interval = Math.max(8, 32 / spd);
-      if (t - lastStepRef.current >= interval && !pausedRef.current && !levelCompleteRef.current) {
+      if (t - lastStepRef.current >= interval && !pausedRef.current && !levelCompleteRef.current && !isRewindingRef.current) {
         const maxSteps = Math.min(2, Math.ceil(spd));
         for (let i = 0; i < maxSteps; i++) {
           useGameStore.getState().step();
@@ -211,9 +217,17 @@ export default function GameCanvas() {
     };
   }, []);
 
+  const tick = useGameStore((s) => s.state.tick);
   const paused = useGameStore((s) => s.state.paused);
   const levelComplete = useGameStore((s) => s.state.levelComplete);
   const levelObjective = useGameStore((s) => s.state.levelObjective);
+  const isRewinding = useGameStore((s) => s.eventRecorder.history.isRewinding);
+  const rewindTick = useGameStore((s) => s.eventRecorder.history.rewindTick);
+  const latestTick = useGameStore((s) => s.eventRecorder.history.currentTick);
+
+  const progress = latestTick > 0
+    ? Math.round(((rewindTick ?? tick) / latestTick) * 100)
+    : 0;
 
   return (
     <div
@@ -228,10 +242,33 @@ export default function GameCanvas() {
       />
       <div className="absolute top-3 left-3 pointer-events-none">
         <div className="text-[10px] font-mono text-emerald-400/60 tracking-widest">
-          SWARM::NETWORK_ACTIVE
+          {isRewinding ? 'SWARM::REWIND_MODE ◀' : 'SWARM::NETWORK_ACTIVE'}
         </div>
       </div>
-      {paused && !levelComplete && (
+      {isRewinding && (
+        <div className="absolute top-3 right-3 pointer-events-none">
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-amber-500/15 border border-amber-500/40 backdrop-blur-sm">
+            <div className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+            <div className="w-2 h-2 rounded-full bg-amber-400 animate-pulse absolute ml-0" />
+            <span className="text-[11px] font-mono font-bold text-amber-300 tracking-wider ml-3">
+              REWIND · TICK {String(rewindTick ?? 0).padStart(6, '0')}
+            </span>
+            <span className="text-[10px] font-mono text-amber-400/60">
+              / {String(latestTick).padStart(6, '0')} · {progress}%
+            </span>
+          </div>
+        </div>
+      )}
+      {isRewinding && (
+        <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none">
+          <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-amber-500/10 border border-amber-500/30 backdrop-blur-sm">
+            <span className="text-[10px] text-amber-400/80 font-mono tracking-widest">
+              ◀◀ 使用右侧时间轴滑块或事件列表查看历史帧 ▶▶
+            </span>
+          </div>
+        </div>
+      )}
+      {paused && !levelComplete && !isRewinding && (
         <div className="absolute inset-0 bg-black/50 flex items-center justify-center backdrop-blur-sm">
           <div className="text-center">
             <div className="text-5xl font-black text-amber-400 tracking-[0.3em] mb-2"
